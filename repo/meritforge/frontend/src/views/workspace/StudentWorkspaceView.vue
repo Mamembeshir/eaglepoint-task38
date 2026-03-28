@@ -1,0 +1,462 @@
+<script setup lang="ts">
+import {
+  BookHeart,
+  Bookmark,
+  CheckCircle2,
+  FastForward,
+  Heart,
+  Play,
+  Sparkles,
+  StickyNote,
+  Video
+} from 'lucide-vue-next'
+import { computed, onMounted, ref, watch } from 'vue'
+
+import { UIBadge } from '@/components/ui/badge'
+import { UIButton } from '@/components/ui/button'
+import { UICard, UICardContent, UICardDescription, UICardHeader, UICardTitle } from '@/components/ui/card'
+import { UIInput } from '@/components/ui/input'
+import { UITextarea } from '@/components/ui/textarea'
+import { useStudentWorkspaceStore } from '@/stores/studentWorkspace'
+
+const workspace = useStudentWorkspaceStore()
+
+const playerEl = ref<HTMLVideoElement | null>(null)
+const activeTab = ref<'videos' | 'bookshelf' | 'milestones'>('videos')
+const annotationDraft = ref('')
+const annotationSaving = ref(false)
+const annotationError = ref('')
+const transcriptSelectionHost = ref<HTMLElement | null>(null)
+const selectedStartOffset = ref<number | null>(null)
+const selectedEndOffset = ref<number | null>(null)
+const selectedHighlightedText = ref('')
+const searchQuery = ref('')
+const searchResults = ref<Array<{ id: string; title: string; topic: string; durationSeconds: number }>>([])
+const searching = ref(false)
+let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
+let lastTelemetryTick = 0
+
+const allTopics = computed(() => [...new Set(workspace.videos.map((video) => video.topic))])
+const currentProgress = computed(() => {
+  const current = workspace.currentVideo
+  if (!current) return 0
+  return workspace.progressByVideo[current.id] ?? 0
+})
+
+const currentAnnotations = computed(() => {
+  const current = workspace.currentVideo
+  if (!current) return []
+  return workspace.annotationsByVideo[current.id] ?? []
+})
+
+const completionPercentage = (progressValue: number, targetValue: number) => {
+  if (targetValue <= 0) return 0
+  return Math.min(100, Math.round((progressValue / targetValue) * 100))
+}
+
+async function onVideoPlay() {
+  if (!playerEl.value) return
+  await workspace.trackPlay(Math.floor(playerEl.value.currentTime))
+}
+
+async function onVideoTimeUpdate() {
+  if (!playerEl.value || !workspace.currentVideo) return
+  const now = Date.now()
+  if (now - lastTelemetryTick < 5000) return
+  lastTelemetryTick = now
+  await workspace.trackPlay(Math.floor(playerEl.value.currentTime))
+}
+
+async function skipVideo() {
+  await workspace.skipCurrentVideo()
+  const currentIndex = workspace.videos.findIndex((v) => v.id === workspace.currentVideoId)
+  const next = workspace.videos[(currentIndex + 1) % workspace.videos.length]
+  if (next) {
+    workspace.selectVideo(next.id)
+  }
+}
+
+async function saveAnnotation() {
+  annotationError.value = ''
+  if (!workspace.currentVideo || !annotationDraft.value.trim()) return
+  if (selectedStartOffset.value === null || selectedEndOffset.value === null || !selectedHighlightedText.value.trim()) {
+    annotationError.value = 'Select text from transcript/content before saving annotation.'
+    return
+  }
+  annotationSaving.value = true
+  try {
+    await workspace.addAnnotation(workspace.currentVideo.id, annotationDraft.value, {
+      startOffset: selectedStartOffset.value,
+      endOffset: selectedEndOffset.value,
+      highlightedText: selectedHighlightedText.value
+    })
+    annotationDraft.value = ''
+    selectedStartOffset.value = null
+    selectedEndOffset.value = null
+    selectedHighlightedText.value = ''
+  } catch (error) {
+    annotationError.value = error instanceof Error ? error.message : 'Unable to save annotation.'
+  } finally {
+    annotationSaving.value = false
+  }
+}
+
+function captureSelectionFromTranscript() {
+  const host = transcriptSelectionHost.value
+  const selection = window.getSelection()
+  if (!host || !selection || selection.rangeCount === 0) {
+    selectedStartOffset.value = null
+    selectedEndOffset.value = null
+    selectedHighlightedText.value = ''
+    return
+  }
+
+  const range = selection.getRangeAt(0)
+  if (!host.contains(range.commonAncestorContainer)) {
+    selectedStartOffset.value = null
+    selectedEndOffset.value = null
+    selectedHighlightedText.value = ''
+    return
+  }
+
+  const highlighted = range.toString()
+  if (!highlighted.trim()) {
+    selectedStartOffset.value = null
+    selectedEndOffset.value = null
+    selectedHighlightedText.value = ''
+    return
+  }
+
+  const preRange = document.createRange()
+  preRange.selectNodeContents(host)
+  preRange.setEnd(range.startContainer, range.startOffset)
+
+  selectedStartOffset.value = preRange.toString().length
+  selectedEndOffset.value = selectedStartOffset.value + highlighted.length
+  selectedHighlightedText.value = highlighted
+}
+
+watch(
+  searchQuery,
+  (value) => {
+    if (searchDebounceHandle) {
+      clearTimeout(searchDebounceHandle)
+    }
+    searchDebounceHandle = setTimeout(async () => {
+      const normalized = value.trim()
+      if (!normalized) {
+        searchResults.value = []
+        return
+      }
+      searching.value = true
+      try {
+        const results = await workspace.searchContent(normalized, 'video', 20)
+        searchResults.value = results.map((item) => ({
+          id: item.id,
+          title: item.title,
+          topic: item.topic,
+          durationSeconds: item.durationSeconds
+        }))
+      } finally {
+        searching.value = false
+      }
+    }, 300)
+  }
+)
+
+watch(
+  () => workspace.currentVideoId,
+  async (videoId) => {
+    await workspace.loadAnnotations(videoId)
+    selectedStartOffset.value = null
+    selectedEndOffset.value = null
+    selectedHighlightedText.value = ''
+    const resume = workspace.progressByVideo[videoId] ?? 0
+    if (playerEl.value && resume > 0) {
+      playerEl.value.currentTime = resume
+    }
+  }
+)
+
+onMounted(async () => {
+  await workspace.hydrateServerState()
+  if (workspace.currentVideo) {
+    await workspace.loadAnnotations(workspace.currentVideo.id)
+  }
+})
+</script>
+
+<template>
+  <section class="space-y-6">
+    <header class="space-y-2">
+      <p class="text-xs uppercase tracking-[0.16em] text-muted-foreground">Student Workspace</p>
+      <h2 class="text-3xl font-semibold tracking-tight">Career Learning Studio</h2>
+      <p class="max-w-3xl text-sm text-muted-foreground">
+        Browse short career videos, track milestones, save your private bookshelf, and continue exactly where you stopped across devices.
+      </p>
+    </header>
+
+    <div class="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-card/70 p-2">
+      <UIButton :variant="activeTab === 'videos' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'videos'">Videos</UIButton>
+      <UIButton :variant="activeTab === 'bookshelf' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'bookshelf'">Bookshelf</UIButton>
+      <UIButton :variant="activeTab === 'milestones' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'milestones'">Milestones</UIButton>
+    </div>
+
+    <div v-if="activeTab === 'videos'" class="grid gap-5 xl:grid-cols-[1.25fr,0.85fr]">
+      <UICard class="border-border/60 bg-card/75">
+        <UICardHeader>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <UICardTitle class="text-2xl">{{ workspace.currentVideo?.title }}</UICardTitle>
+              <UICardDescription>{{ workspace.currentVideo?.summary }}</UICardDescription>
+            </div>
+            <UIBadge variant="secondary" class="capitalize">{{ workspace.currentVideo?.topic }}</UIBadge>
+          </div>
+        </UICardHeader>
+        <UICardContent class="space-y-4">
+          <div class="overflow-hidden rounded-xl border border-border/60 bg-black">
+            <video
+              ref="playerEl"
+              class="aspect-video w-full"
+              controls
+              :poster="workspace.currentVideo?.poster"
+              @play="onVideoPlay"
+              @timeupdate="onVideoTimeUpdate"
+            >
+              <source :src="workspace.currentVideo?.streamUrl" type="video/mp4" />
+            </video>
+          </div>
+
+          <div class="grid gap-3 sm:grid-cols-2">
+            <UIButton class="gap-2" @click="onVideoPlay">
+              <Play class="h-4 w-4" />
+              Track play
+            </UIButton>
+            <UIButton variant="secondary" class="gap-2" @click="skipVideo">
+              <FastForward class="h-4 w-4" />
+              Skip to next
+            </UIButton>
+            <UIButton
+              variant="outline"
+              class="gap-2"
+              @click="workspace.currentVideo && workspace.toggleFavorite(workspace.currentVideo.id)"
+            >
+              <Heart class="h-4 w-4" :class="workspace.currentVideo && workspace.favoriteVideoIds.includes(workspace.currentVideo.id) ? 'fill-current text-rose-500' : ''" />
+              Favorite
+            </UIButton>
+            <UIButton
+              variant="outline"
+              class="gap-2"
+              @click="workspace.currentVideo && workspace.toggleBookmark(workspace.currentVideo.id)"
+            >
+              <Bookmark class="h-4 w-4" />
+              Bookmark
+            </UIButton>
+          </div>
+
+          <div class="rounded-xl border border-border/60 bg-background/60 p-4">
+            <div class="mb-2 flex items-center justify-between text-sm">
+              <span class="font-medium">Resume where you left off</span>
+              <span class="text-muted-foreground">{{ currentProgress }}s</span>
+            </div>
+            <div class="h-2 rounded-full bg-muted">
+              <div
+                class="h-2 rounded-full bg-primary transition-all"
+                :style="{ width: `${workspace.currentVideo ? Math.min(100, (currentProgress / workspace.currentVideo.durationSeconds) * 100) : 0}%` }"
+              />
+            </div>
+          </div>
+        </UICardContent>
+      </UICard>
+
+      <div class="space-y-5">
+        <UICard class="border-border/60 bg-card/75">
+          <UICardHeader>
+            <UICardTitle class="flex items-center gap-2 text-lg"><Video class="h-5 w-5" /> Video Queue</UICardTitle>
+            <UICardDescription>Short-form career content personalized for your progress.</UICardDescription>
+          </UICardHeader>
+          <UICardContent class="space-y-2">
+            <div class="space-y-2 rounded-lg border border-border/60 bg-background/50 p-3">
+              <label class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Search Videos</label>
+              <UIInput v-model="searchQuery" placeholder="Search by title, summary, or metadata" />
+              <p v-if="searching" class="text-xs text-muted-foreground">Searching...</p>
+              <div v-else-if="searchQuery.trim()" class="space-y-2">
+                <button
+                  v-for="video in searchResults"
+                  :key="`search-${video.id}`"
+                  class="w-full rounded-lg border border-border/50 p-2 text-left transition hover:bg-accent/40"
+                  @click="workspace.selectVideo(video.id)"
+                >
+                  <p class="text-sm font-medium leading-5">{{ video.title }}</p>
+                  <p class="text-xs text-muted-foreground capitalize">{{ video.topic }} · {{ Math.ceil(video.durationSeconds / 60) }} min</p>
+                </button>
+                <p v-if="!searchResults.length" class="text-xs text-muted-foreground">No results found.</p>
+              </div>
+            </div>
+            <button
+              v-for="video in workspace.videos"
+              :key="video.id"
+              class="w-full rounded-lg border border-border/50 p-3 text-left transition hover:bg-accent/40"
+              :class="video.id === workspace.currentVideoId ? 'bg-primary/10 border-primary/40' : ''"
+              @click="workspace.selectVideo(video.id)"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <p class="text-sm font-medium leading-5">{{ video.title }}</p>
+                  <p class="text-xs text-muted-foreground">{{ Math.ceil(video.durationSeconds / 60) }} min</p>
+                </div>
+                <UIBadge variant="outline" class="capitalize">{{ video.topic }}</UIBadge>
+              </div>
+            </button>
+          </UICardContent>
+        </UICard>
+
+        <UICard class="border-border/60 bg-card/75">
+          <UICardHeader>
+            <UICardTitle class="flex items-center gap-2 text-lg"><Sparkles class="h-5 w-5" /> Topic Subscriptions</UICardTitle>
+            <UICardDescription>Subscribe to tailor your career stream.</UICardDescription>
+          </UICardHeader>
+          <UICardContent class="flex flex-wrap gap-2">
+            <UIButton
+              v-for="topic in allTopics"
+              :key="topic"
+              size="sm"
+              :variant="workspace.subscribedTopics.includes(topic) ? 'default' : 'outline'"
+              class="capitalize"
+              @click="workspace.toggleTopicSubscription(topic)"
+            >
+              {{ topic.replace('-', ' ') }}
+            </UIButton>
+          </UICardContent>
+        </UICard>
+
+        <UICard class="border-border/60 bg-card/75">
+          <UICardHeader>
+            <UICardTitle class="flex items-center gap-2 text-lg"><StickyNote class="h-5 w-5" /> Annotations</UICardTitle>
+            <UICardDescription>Private by default, or share with a cohort.</UICardDescription>
+          </UICardHeader>
+          <UICardContent class="space-y-3">
+            <div class="grid gap-2 sm:grid-cols-2">
+              <select v-model="workspace.selectedVisibility" class="h-10 rounded-md border border-input bg-background px-3 text-sm">
+                <option value="private">Private</option>
+                <option value="cohort">Cohort</option>
+              </select>
+              <select
+                v-model="workspace.selectedCohortId"
+                :disabled="workspace.selectedVisibility !== 'cohort'"
+                class="h-10 rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+              >
+                <option value="">Select Cohort</option>
+                <option v-for="cohort in workspace.cohorts" :key="cohort.id" :value="cohort.id">{{ cohort.name }}</option>
+              </select>
+            </div>
+
+            <UITextarea v-model="annotationDraft" placeholder="Write your reflection, follow-up question, or action item..." :rows="3" />
+            <div class="space-y-2 rounded-lg border border-border/60 bg-background/50 p-3">
+              <p class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Step 1: Select text from content</p>
+              <p class="text-xs text-muted-foreground">Highlight transcript/excerpt text below, then add your note.</p>
+              <div
+                ref="transcriptSelectionHost"
+                class="max-h-28 overflow-auto rounded-md border border-input bg-background px-3 py-2 text-sm leading-6"
+                @mouseup="captureSelectionFromTranscript"
+                @keyup="captureSelectionFromTranscript"
+              >
+                {{ workspace.currentVideo?.summary || 'No transcript/excerpt available for selection.' }}
+              </div>
+              <p v-if="selectedHighlightedText" class="text-xs text-muted-foreground">
+                Selected ({{ selectedStartOffset }}-{{ selectedEndOffset }}): "{{ selectedHighlightedText }}"
+              </p>
+            </div>
+            <p v-if="annotationError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {{ annotationError }}
+            </p>
+            <UIButton class="w-full" :disabled="annotationSaving || !selectedHighlightedText || (workspace.selectedVisibility === 'cohort' && !workspace.selectedCohortId)" @click="saveAnnotation">
+              {{ annotationSaving ? 'Saving...' : 'Save Annotation' }}
+            </UIButton>
+
+            <div class="space-y-2">
+              <div
+                v-for="annotation in currentAnnotations"
+                :key="annotation.id"
+                class="rounded-lg border border-border/60 bg-background/50 p-3"
+              >
+                <div class="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                  <span class="capitalize">{{ annotation.visibility }}</span>
+                  <span>{{ new Date(annotation.updated_at).toLocaleString() }}</span>
+                </div>
+                <p class="text-sm">{{ annotation.annotation_text }}</p>
+              </div>
+              <p v-if="!currentAnnotations.length" class="text-xs text-muted-foreground">No annotations yet for this video.</p>
+            </div>
+          </UICardContent>
+        </UICard>
+      </div>
+    </div>
+
+    <div v-else-if="activeTab === 'bookshelf'" class="space-y-4">
+      <UICard class="border-border/60 bg-card/75">
+        <UICardHeader>
+          <UICardTitle class="flex items-center gap-2 text-lg"><BookHeart class="h-5 w-5" /> Private Bookshelf</UICardTitle>
+          <UICardDescription>Saved content for focused revisit, notes, and continuous learning.</UICardDescription>
+        </UICardHeader>
+        <UICardContent>
+          <div v-if="workspace.privateBookshelf.length" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <UICard
+              v-for="video in workspace.privateBookshelf"
+              :key="video.id"
+              class="border-border/60 bg-background/70 transition hover:-translate-y-0.5"
+            >
+              <UICardHeader>
+                <UICardTitle class="text-base leading-5">{{ video.title }}</UICardTitle>
+                <UICardDescription>{{ video.summary }}</UICardDescription>
+              </UICardHeader>
+              <UICardContent class="flex items-center justify-between">
+                <UIBadge variant="outline" class="capitalize">{{ video.topic }}</UIBadge>
+                <UIButton variant="ghost" size="sm" @click="workspace.selectVideo(video.id); activeTab = 'videos'">Open</UIButton>
+              </UICardContent>
+            </UICard>
+          </div>
+          <div v-else class="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
+            No bookmarks yet. Favorite or bookmark videos from the stream to build your bookshelf.
+          </div>
+        </UICardContent>
+      </UICard>
+    </div>
+
+    <div v-else class="space-y-4">
+      <UICard class="border-border/60 bg-card/75">
+        <UICardHeader>
+          <UICardTitle class="flex items-center gap-2 text-lg"><CheckCircle2 class="h-5 w-5" /> Employment Milestones</UICardTitle>
+          <UICardDescription>Track your journey from learning interactions to verified career outcomes.</UICardDescription>
+        </UICardHeader>
+        <UICardContent class="space-y-3">
+          <div
+            v-for="milestone in workspace.milestones"
+            :key="milestone.id"
+            class="rounded-lg border border-border/60 bg-background/60 p-4"
+          >
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <p class="font-medium">{{ milestone.milestone_name }}</p>
+              <UIBadge :variant="milestone.progress_value >= milestone.target_value ? 'success' : 'secondary'">
+                {{ milestone.progress_value }}/{{ milestone.target_value }}
+              </UIBadge>
+            </div>
+            <div class="h-2 rounded-full bg-muted">
+              <div
+                class="h-2 rounded-full bg-primary transition-all"
+                :style="{ width: `${completionPercentage(milestone.progress_value, milestone.target_value)}%` }"
+              />
+            </div>
+            <div class="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+              <span class="capitalize">{{ milestone.source }} update</span>
+              <span>{{ new Date(milestone.updated_at).toLocaleString() }}</span>
+            </div>
+          </div>
+          <div v-if="!workspace.milestones.length" class="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
+            Milestones will appear here as your activity and job progress updates are recorded.
+          </div>
+        </UICardContent>
+      </UICard>
+    </div>
+  </section>
+</template>

@@ -1,0 +1,286 @@
+version: "3.9"
+
+services:
+  ssl-init:
+    image: alpine:3.20
+    container_name: meritforge-ssl-init
+    restart: "no"
+    command: >
+      sh -c "
+      apk add --no-cache openssl >/dev/null &&
+      mkdir -p /ssl &&
+      if [ ! -f /ssl/cert.pem ] || [ ! -f /ssl/key.pem ]; then
+        openssl req -x509 -nodes -newkey rsa:2048 -days 365 -keyout /ssl/key.pem -out /ssl/cert.pem -subj '/CN=localhost' >/dev/null 2>&1 &&
+        echo 'Generated development self-signed TLS certs in nginx/ssl/' ;
+      else
+        echo 'Using existing TLS certs in nginx/ssl/' ;
+      fi"
+    volumes:
+      - ./nginx/ssl:/ssl
+    networks:
+      - meritforge-network
+
+  db:
+    image: postgres:16-alpine
+    container_name: meritforge-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-meritforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-meritforge_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-meritforge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-meritforge} -d ${POSTGRES_DB:-meritforge}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - meritforge-network
+
+  db-dev-tools:
+    image: alpine/socat
+    container_name: meritforge-db-dev-tools
+    profiles: ["dev-tools"]
+    command: tcp-listen:5432,fork,reuseaddr tcp-connect:db:5432
+    ports:
+      - "5432:5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - meritforge-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: meritforge-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - meritforge-network
+
+  redis-dev-tools:
+    image: alpine/socat
+    container_name: meritforge-redis-dev-tools
+    profiles: ["dev-tools"]
+    command: tcp-listen:6379,fork,reuseaddr tcp-connect:redis:6379
+    ports:
+      - "6379:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - meritforge-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: meritforge-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-meritforge}:${POSTGRES_PASSWORD:-meritforge_secret}@db:5432/${POSTGRES_DB:-meritforge}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      PASSWORD_PEPPER_CURRENT: ${PASSWORD_PEPPER_CURRENT:-}
+      PASSWORD_PEPPER_PREVIOUS: ${PASSWORD_PEPPER_PREVIOUS:-}
+      REFRESH_TOKEN_HASH_KEYS: ${REFRESH_TOKEN_HASH_KEYS:-}
+      REFRESH_TOKEN_HASH_ACTIVE_KEY_ID: ${REFRESH_TOKEN_HASH_ACTIVE_KEY_ID:-legacy-sha256}
+      REFRESH_TOKEN_HASH_ROTATION_DAYS: ${REFRESH_TOKEN_HASH_ROTATION_DAYS:-180}
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
+      ACCESS_COOKIE_NAME: ${ACCESS_COOKIE_NAME:-access_token}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-refresh_token}
+      STEP_UP_HEADER_NAME: ${STEP_UP_HEADER_NAME:-X-Step-Up-Password}
+      USER_RATE_LIMIT_PER_MINUTE: ${USER_RATE_LIMIT_PER_MINUTE:-120}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost,http://localhost:3000,http://localhost}
+      DEBUG: ${DEBUG:-false}
+      SEED_DEV_PASSWORD: ${SEED_DEV_PASSWORD:-MeritForgeDev!2026}
+      PYTHONPATH: /app
+    volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/scripts:/app/scripts:ro
+      - backend_uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - meritforge-network
+
+  test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles:
+      - test
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-meritforge}:${POSTGRES_PASSWORD:-meritforge_secret}@db:5432/${POSTGRES_DB:-meritforge}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      PASSWORD_PEPPER_CURRENT: ${PASSWORD_PEPPER_CURRENT:-}
+      PASSWORD_PEPPER_PREVIOUS: ${PASSWORD_PEPPER_PREVIOUS:-}
+      REFRESH_TOKEN_HASH_KEYS: ${REFRESH_TOKEN_HASH_KEYS:-}
+      REFRESH_TOKEN_HASH_ACTIVE_KEY_ID: ${REFRESH_TOKEN_HASH_ACTIVE_KEY_ID:-legacy-sha256}
+      REFRESH_TOKEN_HASH_ROTATION_DAYS: ${REFRESH_TOKEN_HASH_ROTATION_DAYS:-180}
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
+      ACCESS_COOKIE_NAME: ${ACCESS_COOKIE_NAME:-access_token}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-refresh_token}
+      STEP_UP_HEADER_NAME: ${STEP_UP_HEADER_NAME:-X-Step-Up-Password}
+      USER_RATE_LIMIT_PER_MINUTE: ${USER_RATE_LIMIT_PER_MINUTE:-120}
+      PYTHONPATH: /app
+      COVERAGE_RCFILE: /tests/.coveragerc
+    working_dir: /tests
+    command: >
+      sh -c "coverage erase &&
+      coverage run -m unittest discover -s unit_tests -p 'test_*.py' -v &&
+      coverage run --append -m unittest discover -s API_tests -p 'test_*.py' -v &&
+      coverage report &&
+      coverage html"
+    volumes:
+      - ./backend:/app:ro
+      - ./unit_tests:/tests/unit_tests:ro
+      - ./API_tests:/tests/API_tests:ro
+      - ./.coveragerc:/tests/.coveragerc:ro
+      - ./coverage_html:/tests/coverage_html
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - meritforge-network
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: meritforge-celery-worker
+    restart: unless-stopped
+    command: celery -A app.core.celery_app.celery_app worker --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-meritforge}:${POSTGRES_PASSWORD:-meritforge_secret}@db:5432/${POSTGRES_DB:-meritforge}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      PASSWORD_PEPPER_CURRENT: ${PASSWORD_PEPPER_CURRENT:-}
+      PASSWORD_PEPPER_PREVIOUS: ${PASSWORD_PEPPER_PREVIOUS:-}
+      REFRESH_TOKEN_HASH_KEYS: ${REFRESH_TOKEN_HASH_KEYS:-}
+      REFRESH_TOKEN_HASH_ACTIVE_KEY_ID: ${REFRESH_TOKEN_HASH_ACTIVE_KEY_ID:-legacy-sha256}
+      REFRESH_TOKEN_HASH_ROTATION_DAYS: ${REFRESH_TOKEN_HASH_ROTATION_DAYS:-180}
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
+      ACCESS_COOKIE_NAME: ${ACCESS_COOKIE_NAME:-access_token}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-refresh_token}
+      STEP_UP_HEADER_NAME: ${STEP_UP_HEADER_NAME:-X-Step-Up-Password}
+      USER_RATE_LIMIT_PER_MINUTE: ${USER_RATE_LIMIT_PER_MINUTE:-120}
+    volumes:
+      - ./backend/app:/app/app:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - meritforge-network
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: meritforge-celery-beat
+    restart: unless-stopped
+    command: celery -A app.core.celery_app.celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-meritforge}:${POSTGRES_PASSWORD:-meritforge_secret}@db:5432/${POSTGRES_DB:-meritforge}
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      PASSWORD_PEPPER_CURRENT: ${PASSWORD_PEPPER_CURRENT:-}
+      PASSWORD_PEPPER_PREVIOUS: ${PASSWORD_PEPPER_PREVIOUS:-}
+      REFRESH_TOKEN_HASH_KEYS: ${REFRESH_TOKEN_HASH_KEYS:-}
+      REFRESH_TOKEN_HASH_ACTIVE_KEY_ID: ${REFRESH_TOKEN_HASH_ACTIVE_KEY_ID:-legacy-sha256}
+      REFRESH_TOKEN_HASH_ROTATION_DAYS: ${REFRESH_TOKEN_HASH_ROTATION_DAYS:-180}
+      SECURE_COOKIES: ${SECURE_COOKIES:-true}
+      ACCESS_COOKIE_NAME: ${ACCESS_COOKIE_NAME:-access_token}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-refresh_token}
+      STEP_UP_HEADER_NAME: ${STEP_UP_HEADER_NAME:-X-Step-Up-Password}
+      USER_RATE_LIMIT_PER_MINUTE: ${USER_RATE_LIMIT_PER_MINUTE:-120}
+    volumes:
+      - ./backend/app:/app/app:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - meritforge-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: ${NODE_ENV:-development}
+    container_name: meritforge-frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-}
+      VITE_APP_NAME: ${VITE_APP_NAME:-MeritForge}
+      NODE_ENV: ${NODE_ENV:-development}
+    volumes:
+      - ./frontend/src:/app/src:ro
+      - ./frontend/public:/app/public:ro
+      - ./nginx/ssl:/certs:ro
+    depends_on:
+      - backend
+    networks:
+      - meritforge-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: meritforge-nginx
+    restart: unless-stopped
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    command: >
+      sh -c "
+      [ -f /etc/nginx/ssl/cert.pem ] && [ -f /etc/nginx/ssl/key.pem ] ||
+      { echo 'ERROR: TLS files missing (/etc/nginx/ssl/cert.pem, /etc/nginx/ssl/key.pem).'; exit 1; };
+      nginx -g 'daemon off;'"
+    depends_on:
+      ssl-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+      frontend:
+        condition: service_started
+    networks:
+      - meritforge-network
+
+volumes:
+  postgres_data:
+  redis_data:
+  backend_uploads:
+
+networks:
+  meritforge-network:
+    driver: bridge

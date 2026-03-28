@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 35 43% 97%;
+    --foreground: 220 15% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 12%;
+    --primary: 193 69% 35%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 183 25% 90%;
+    --secondary-foreground: 220 15% 18%;
+    --muted: 210 16% 92%;
+    --muted-foreground: 217 10% 45%;
+    --accent: 34 82% 86%;
+    --accent-foreground: 24 39% 20%;
+    --destructive: 1 75% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 220 16% 84%;
+    --input: 220 16% 84%;
+    --ring: 193 69% 35%;
+    --radius: 0.85rem;
+  }
+
+  .dark {
+    --background: 218 24% 10%;
+    --foreground: 210 29% 92%;
+    --card: 218 22% 14%;
+    --card-foreground: 210 29% 92%;
+    --primary: 188 67% 58%;
+    --primary-foreground: 218 24% 10%;
+    --secondary: 217 21% 18%;
+    --secondary-foreground: 210 29% 92%;
+    --muted: 217 20% 22%;
+    --muted-foreground: 214 16% 69%;
+    --accent: 36 56% 35%;
+    --accent-foreground: 47 93% 92%;
+    --destructive: 0 62% 41%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 217 22% 24%;
+    --input: 217 22% 24%;
+    --ring: 188 67% 58%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Manrope', 'Plus Jakarta Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+    min-height: 100vh;
+  }
+}

@@ -1,0 +1,10 @@
+__pycache__
+*.py[cod]
+*$py.class
+.Python
+.venv
+venv/
+*.so
+.env
+coverage_html/*
+!coverage_html/.gitkeep

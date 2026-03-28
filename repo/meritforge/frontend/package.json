@@ -1,0 +1,49 @@
+{
+  "name": "meritforge-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 3000",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs,.ts,.tsx,.cts,.mts --fix",
+    "test": "vitest",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@radix-icons/vue": "^1.0.0",
+    "@vueuse/core": "^10.7.2",
+    "axios": "^1.6.5",
+    "chart.js": "^4.5.0",
+    "class-variance-authority": "^0.7.0",
+    "clsx": "^2.1.0",
+    "lucide-vue-next": "^0.309.0",
+    "pinia": "^2.1.7",
+    "radix-vue": "^1.4.5",
+    "shadcn-vue": "^0.11.3",
+    "tailwind-merge": "^2.2.0",
+    "vite-plugin-pwa": "^1.2.0",
+    "vue": "^3.4.15",
+    "vue-router": "^4.2.5"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^6.19.1",
+    "@typescript-eslint/parser": "^6.19.1",
+    "@pinia/testing": "^0.1.7",
+    "@vitejs/plugin-vue": "^5.0.3",
+    "@vue/tsconfig": "^0.5.1",
+    "@vue/test-utils": "^2.4.6",
+    "autoprefixer": "^10.4.17",
+    "eslint": "^8.56.0",
+    "eslint-plugin-vue": "^9.20.1",
+    "jsdom": "^25.0.1",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "~5.3.3",
+    "vite": "^5.0.11",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^1.8.27"
+  }
+}
