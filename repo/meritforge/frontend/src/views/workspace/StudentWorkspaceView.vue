@@ -10,7 +10,7 @@ import {
   StickyNote,
   Video
 } from 'lucide-vue-next'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import { UIBadge } from '@/components/ui/badge'
 import { UIButton } from '@/components/ui/button'
@@ -35,6 +35,16 @@ const searchQuery = ref('')
 const searchResults = ref<Array<{ id: string; title: string; topic: string; durationSeconds: number }>>([])
 const searching = ref(false)
 const pageError = ref('')
+const videoLoadError = ref('')
+const videoLoading = ref(false)
+const milestoneForm = reactive({
+  applicationId: '',
+  milestoneTemplateId: '',
+  milestoneName: '',
+  progressValue: '1',
+  targetValue: '1',
+  description: ''
+})
 let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 let lastTelemetryTick = 0
 
@@ -75,6 +85,47 @@ async function skipVideo() {
   const next = workspace.videos[(currentIndex + 1) % workspace.videos.length]
   if (next) {
     workspace.selectVideo(next.id)
+  }
+}
+
+function onVideoSourceChange() {
+  videoLoadError.value = ''
+  videoLoading.value = Boolean(workspace.currentVideo?.streamUrl)
+}
+
+function onVideoLoaded() {
+  videoLoadError.value = ''
+  videoLoading.value = false
+}
+
+function onVideoError() {
+  videoLoading.value = false
+  videoLoadError.value = "This video URL couldn't be loaded (network, CORS, or invalid URL)."
+}
+
+function retryVideoLoad() {
+  if (!playerEl.value) return
+  videoLoadError.value = ''
+  videoLoading.value = true
+  playerEl.value.load()
+}
+
+async function submitMilestoneUpdate() {
+  pageError.value = ''
+  try {
+    await workspace.reportApplicationMilestone({
+      applicationId: milestoneForm.applicationId,
+      milestoneTemplateId: milestoneForm.milestoneTemplateId,
+      milestoneName: milestoneForm.milestoneName,
+      progressValue: Number(milestoneForm.progressValue),
+      targetValue: Number(milestoneForm.targetValue),
+      description: milestoneForm.description || undefined
+    })
+    milestoneForm.milestoneName = ''
+    milestoneForm.description = ''
+  } catch (error) {
+    pageError.value = getApiErrorMessage(error)
+    logDevError(error)
   }
 }
 
@@ -174,6 +225,7 @@ watch(
   () => workspace.currentVideoId,
   async (videoId) => {
     pageError.value = ''
+    onVideoSourceChange()
     try {
       await workspace.loadAnnotations(videoId)
     } catch (error) {
@@ -192,6 +244,7 @@ watch(
 
 onMounted(async () => {
   pageError.value = ''
+  onVideoSourceChange()
   try {
     await workspace.hydrateServerState()
     if (workspace.currentVideo) {
@@ -256,9 +309,32 @@ onMounted(async () => {
               :poster="workspace.currentVideo?.poster"
               @play="onVideoPlay"
               @timeupdate="onVideoTimeUpdate"
+              @loadeddata="onVideoLoaded"
+              @error="onVideoError"
             >
               <source :src="workspace.currentVideo?.streamUrl" type="video/mp4" />
             </video>
+          </div>
+
+          <div v-if="workspace.currentVideo?.status === 'retracted'" class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700">
+            {{ workspace.currentVideo.retractionNotice || 'This content has been retracted.' }}
+          </div>
+
+          <p v-if="videoLoading" class="text-xs text-muted-foreground">Loading video...</p>
+          <div v-if="videoLoadError" class="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            <p>{{ videoLoadError }}</p>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <UIButton size="sm" variant="outline" @click="retryVideoLoad">Retry</UIButton>
+              <a
+                v-if="workspace.currentVideo?.streamUrl"
+                :href="workspace.currentVideo.streamUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-xs text-primary underline-offset-2 hover:underline"
+              >
+                Open video URL in new tab
+              </a>
+            </div>
           </div>
 
           <div class="grid gap-3 sm:grid-cols-2">
@@ -458,6 +534,29 @@ onMounted(async () => {
     </div>
 
     <div v-else class="space-y-4">
+      <UICard class="border-border/60 bg-card/75">
+        <UICardHeader>
+          <UICardTitle class="text-lg">Report Application Milestone</UICardTitle>
+          <UICardDescription>Log progress updates for one of your applications.</UICardDescription>
+        </UICardHeader>
+        <UICardContent class="grid gap-3 md:grid-cols-2">
+          <select v-model="milestoneForm.applicationId" class="h-10 rounded-md border border-input bg-background px-3 text-sm">
+            <option value="">Select application</option>
+            <option v-for="application in workspace.applications" :key="application.id" :value="application.id">
+              {{ application.id.slice(0, 8) }}... • {{ application.status.replace('_', ' ') }}
+            </option>
+          </select>
+          <UIInput v-model="milestoneForm.milestoneTemplateId" placeholder="Milestone template ID" />
+          <UIInput v-model="milestoneForm.milestoneName" placeholder="Milestone name" class="md:col-span-2" />
+          <UIInput v-model="milestoneForm.progressValue" type="number" placeholder="Progress value" />
+          <UIInput v-model="milestoneForm.targetValue" type="number" placeholder="Target value" />
+          <UITextarea v-model="milestoneForm.description" class="md:col-span-2" :rows="2" placeholder="Optional note" />
+          <UIButton class="md:col-span-2" :disabled="!milestoneForm.applicationId || !milestoneForm.milestoneTemplateId || !milestoneForm.milestoneName" @click="submitMilestoneUpdate">
+            Submit milestone update
+          </UIButton>
+        </UICardContent>
+      </UICard>
+
       <UICard class="border-border/60 bg-card/75">
         <UICardHeader>
           <UICardTitle class="flex items-center gap-2 text-lg"><CheckCircle2 class="h-5 w-5" /> Employment Milestones</UICardTitle>

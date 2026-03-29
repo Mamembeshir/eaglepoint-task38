@@ -17,6 +17,9 @@ interface CareerVideo {
   streamUrl: string
   poster: string
   contentType: 'video' | 'article' | 'job_announcement'
+  status: 'published' | 'retracted'
+  retractedAt: string | null
+  retractionNotice: string | null
 }
 
 interface ContentItem {
@@ -26,6 +29,16 @@ interface ContentItem {
   media_url?: string | null
   metadata?: Record<string, unknown> | null
   summary?: string | null
+  status: 'published' | 'retracted'
+  retracted_at?: string | null
+  retraction_notice?: string | null
+}
+
+interface StudentApplication {
+  id: string
+  job_post_id: string
+  status: string
+  created_at: string
 }
 
 interface CohortOption {
@@ -83,6 +96,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   const cohorts = ref<CohortOption[]>([])
   const milestones = ref<Milestone[]>([])
   const annotationsByVideo = ref<Record<string, AnnotationItem[]>>({})
+  const applications = ref<StudentApplication[]>([])
   const selectedVisibility = ref<AnnotationVisibilitySelection>('private')
   const selectedCohortId = ref<string>('')
   const hydrateError = ref('')
@@ -111,7 +125,10 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
       summary,
       streamUrl,
       poster,
-      contentType: item.content_type
+      contentType: item.content_type,
+      status: item.status,
+      retractedAt: item.retracted_at ?? null,
+      retractionNotice: item.retraction_notice ?? null
     }
   }
 
@@ -148,13 +165,14 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     hydrateError.value = ''
     loading.value = true
     try {
-      const [progressRes, exportRes, milestoneRes, contentRes, bookmarksRes, subscriptionsRes] = await Promise.all([
+      const [progressRes, exportRes, milestoneRes, contentRes, bookmarksRes, subscriptionsRes, applicationsRes] = await Promise.all([
         api.get<Array<{ content_id: string; progress_seconds: number }>>('/api/v1/telemetry/progress'),
         api.get<{ cohorts: CohortOption[] }>('/api/v1/users/me/export'),
         api.get<Milestone[]>(`/api/v1/students/${auth.user.id}/milestones`),
         api.get<ContentItem[]>('/api/v1/content', { params: { type: 'video' } }),
         api.get<BookmarkItem[]>('/api/v1/bookmarks').catch(() => ({ data: [] })),
-        api.get<TopicSubscriptionItem[]>('/api/v1/users/me/topic-subscriptions').catch(() => ({ data: [] }))
+        api.get<TopicSubscriptionItem[]>('/api/v1/users/me/topic-subscriptions').catch(() => ({ data: [] })),
+        api.get<StudentApplication[]>('/api/v1/student/applications').catch(() => ({ data: [] }))
       ])
 
       const progressMap: Record<string, number> = {}
@@ -173,6 +191,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
       bookmarkedVideoIds.value = bookmarkItems.map((item) => item.content_id)
       favoriteVideoIds.value = bookmarkItems.filter((item) => item.is_favorite).map((item) => item.content_id)
       subscribedTopics.value = (subscriptionsRes.data ?? []).map((item) => item.topic)
+      applications.value = applicationsRes.data ?? []
 
       if (!videos.value.find((video) => video.id === currentVideoId.value)) {
         currentVideoId.value = videos.value[0]?.id ?? ''
@@ -352,6 +371,34 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     await loadAnnotations(contentId)
   }
 
+  async function reportApplicationMilestone(payload: {
+    applicationId: string
+    milestoneTemplateId: string
+    milestoneName: string
+    progressValue: number
+    targetValue: number
+    description?: string
+  }) {
+    actionError.value = ''
+    try {
+      await api.post(`/api/v1/student/applications/${payload.applicationId}/milestones`, {
+        milestone_template_id: payload.milestoneTemplateId,
+        milestone_name: payload.milestoneName,
+        description: payload.description,
+        progress_value: payload.progressValue,
+        target_value: payload.targetValue
+      })
+      if (auth.user) {
+        const { data } = await api.get<Milestone[]>(`/api/v1/students/${auth.user.id}/milestones`)
+        milestones.value = data ?? []
+      }
+    } catch (error) {
+      actionError.value = getApiErrorMessage(error)
+      logDevError(error)
+      throw error
+    }
+  }
+
   return {
     loading,
     contents,
@@ -364,6 +411,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     progressByVideo,
     cohorts,
     milestones,
+    applications,
     annotationsByVideo,
     selectedVisibility,
     selectedCohortId,
@@ -381,6 +429,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     toggleBookmark,
     toggleTopicSubscription,
     searchContent,
-    addAnnotation
+    addAnnotation,
+    reportApplicationMilestone
   }
 })

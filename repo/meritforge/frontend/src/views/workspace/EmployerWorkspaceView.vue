@@ -20,6 +20,13 @@ const createForm = reactive({
   description: ''
 })
 
+const milestoneTemplateForm = reactive({
+  key: '',
+  name: '',
+  description: '',
+  threshold_count: '1'
+})
+
 const selectedPost = computed(() => store.posts.find((p) => p.id === store.selectedPostId) ?? null)
 
 async function createPost() {
@@ -38,6 +45,19 @@ async function createPost() {
   createForm.employment_type = ''
   createForm.application_deadline = ''
   createForm.description = ''
+}
+
+async function createMilestoneTemplate() {
+  await store.createMilestoneTemplate({
+    key: milestoneTemplateForm.key,
+    name: milestoneTemplateForm.name,
+    description: milestoneTemplateForm.description || undefined,
+    threshold_count: Number(milestoneTemplateForm.threshold_count)
+  })
+  milestoneTemplateForm.key = ''
+  milestoneTemplateForm.name = ''
+  milestoneTemplateForm.description = ''
+  milestoneTemplateForm.threshold_count = '1'
 }
 
 watch(
@@ -105,6 +125,20 @@ onMounted(async () => {
     </div>
 
     <div class="grid gap-5 xl:grid-cols-2">
+      <UICard class="border-border/60 bg-card/75">
+        <UICardHeader>
+          <UICardTitle class="text-lg">Milestone Template Setup</UICardTitle>
+          <UICardDescription>Create hiring-track milestone templates for the selected post.</UICardDescription>
+        </UICardHeader>
+        <UICardContent class="space-y-3">
+          <UIInput v-model="milestoneTemplateForm.key" placeholder="Template key" />
+          <UIInput v-model="milestoneTemplateForm.name" placeholder="Template name" />
+          <UITextarea v-model="milestoneTemplateForm.description" :rows="2" placeholder="Description (optional)" />
+          <UIInput v-model="milestoneTemplateForm.threshold_count" type="number" placeholder="Threshold count" />
+          <UIButton class="w-full" :disabled="!store.selectedPostId" @click="createMilestoneTemplate">Create Template</UIButton>
+        </UICardContent>
+      </UICard>
+
       <UICard class="border-border/60 bg-card/75">
         <UICardHeader>
           <UICardTitle class="flex items-center gap-2 text-lg"><ClipboardList class="h-5 w-5" /> Applications</UICardTitle>

@@ -100,7 +100,10 @@ onMounted(async () => {
         </div>
 
         <div v-if="!store.queue.length" class="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
-          Review queue is empty. You are all caught up.
+          <p class="font-medium text-foreground">No items are visible in the review queue yet.</p>
+          <p class="mt-2">
+            Submissions appear here only after an administrator configures workflow template stages and initializes workflow for each content item.
+          </p>
         </div>
       </UICardContent>
     </UICard>

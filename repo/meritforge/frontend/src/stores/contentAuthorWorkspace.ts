@@ -14,6 +14,14 @@ interface ReviewComment {
   created_at: string
 }
 
+interface SubmissionStage {
+  stage_name: string
+  stage_order: number
+  is_required: boolean
+  is_parallel: boolean
+  is_completed: boolean
+}
+
 interface Submission {
   content_id: string
   title: string
@@ -21,14 +29,34 @@ interface Submission {
   status: string
   risk_score: number | null
   risk_grade: string | null
+  workflow_stage_count: number
+  stages: SubmissionStage[]
   review_comments: ReviewComment[]
   created_at: string
+}
+
+interface SubmissionCreateResponse {
+  content_id: string
+}
+
+interface SubmitResult {
+  ok: boolean
+  contentId?: string
 }
 
 export const useContentAuthorWorkspaceStore = defineStore('content-author-workspace', () => {
   const loading = ref(false)
   const submissions = ref<Submission[]>([])
   const submitError = ref('')
+
+  function isValidHttpUrl(value: string): boolean {
+    try {
+      const parsed = new URL(value)
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    } catch {
+      return false
+    }
+  }
 
   function validateSubmission(payload: {
     content_type: ContentType
@@ -44,6 +72,9 @@ export const useContentAuthorWorkspaceStore = defineStore('content-author-worksp
     }
     if (payload.content_type === 'video' && !(payload.media_url ?? '').trim()) {
       return 'Media URL is required for video submissions.'
+    }
+    if (payload.content_type === 'video' && payload.media_url && !isValidHttpUrl(payload.media_url.trim())) {
+      return 'Media URL must start with http:// or https:// and point to a direct media file.'
     }
     return null
   }
@@ -64,28 +95,28 @@ export const useContentAuthorWorkspaceStore = defineStore('content-author-worksp
     body?: string
     media_url?: string
     metadata?: Record<string, unknown>
-  }) {
+  }): Promise<SubmitResult> {
     submitError.value = ''
     const validationError = validateSubmission(payload)
     if (validationError) {
       submitError.value = validationError
-      return false
+      return { ok: false }
     }
 
     loading.value = true
     try {
-      await api.post('/api/v1/content/submissions', {
+      const { data } = await api.post<SubmissionCreateResponse>('/api/v1/content/submissions', {
         ...payload,
         title: payload.title.trim(),
         body: payload.body?.trim() || undefined,
         media_url: payload.media_url?.trim() || undefined
       })
       await loadSubmissions()
-      return true
+      return { ok: true, contentId: data?.content_id }
     } catch (error) {
       submitError.value = getApiErrorMessage(error)
       logDevError(error)
-      return false
+      return { ok: false }
     } finally {
       loading.value = false
     }

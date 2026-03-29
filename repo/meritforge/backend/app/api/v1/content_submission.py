@@ -25,8 +25,10 @@ from app.schemas.content_submission import (
     ContentSubmissionOut,
     ContentSubmissionRequest,
     ReviewCommentOut,
+    ReviewStageSummaryOut,
     TriggeredWordOut,
 )
+from app.services.review_workflow_service import ensure_content_review_workflow
 from app.services.publishing_service import is_user_in_canary
 
 router = APIRouter(tags=["Content Submission"])
@@ -42,9 +44,8 @@ def list_content_catalog(
     current_user: User = Depends(get_current_user),
 ) -> list[ContentCatalogItemOut]:
     query = select(Content).outerjoin(ContentVersion, ContentVersion.id == Content.current_version_id).where(
-        Content.status == ContentStatus.PUBLISHED,
+        Content.status.in_([ContentStatus.PUBLISHED, ContentStatus.RETRACTED]),
         Content.published_at.is_not(None),
-        Content.retracted_at.is_(None),
     )
     if content_type is not None:
         query = query.where(Content.content_type == content_type)
@@ -65,7 +66,7 @@ def list_content_catalog(
 
     items: list[ContentCatalogItemOut] = []
     for row in rows:
-        if row.status != ContentStatus.PUBLISHED or row.published_at is None or row.retracted_at is not None:
+        if row.status not in {ContentStatus.PUBLISHED, ContentStatus.RETRACTED} or row.published_at is None:
             continue
         canary = getattr(row, "canary_config", None)
         if canary and canary.is_enabled and canary.is_active:
@@ -95,9 +96,12 @@ def list_content_catalog(
                 id=row.id,
                 title=row.title,
                 content_type=row.content_type,
+                status=row.status,
                 media_url=media_url,
                 metadata=submission_metadata if isinstance(submission_metadata, dict) else (metadata_json if isinstance(metadata_json, dict) else None),
                 summary=summary,
+                retracted_at=row.retracted_at,
+                retraction_notice="This content has been retracted." if row.retracted_at else None,
             )
         )
 
@@ -274,6 +278,7 @@ def submit_content(
         required_distinct_reviewers=required_distinct_reviewers,
     )
     db.add(risk_assessment)
+    ensure_content_review_workflow(db, content, created_by_id=current_user.id)
 
     write_audit_log(
         db,
@@ -355,6 +360,17 @@ def list_my_submissions(
                 status=row.status,
                 risk_score=assessment.risk_score if assessment else None,
                 risk_grade=assessment.risk_grade if assessment else None,
+                workflow_stage_count=len(stage_rows),
+                stages=[
+                    ReviewStageSummaryOut(
+                        stage_name=stage.stage_name,
+                        stage_order=stage.stage_order,
+                        is_required=stage.is_required,
+                        is_parallel=stage.is_parallel,
+                        is_completed=stage.is_completed,
+                    )
+                    for stage in stage_rows
+                ],
                 review_comments=comments,
                 created_at=row.created_at,
             )

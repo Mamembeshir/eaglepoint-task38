@@ -23,6 +23,7 @@ from app.schemas.review_workflow import (
     TemplateStageOut,
 )
 from app.schemas.reviewer import ReviewerQueueItemOut
+from app.services.review_workflow_service import ensure_active_template_stages, ensure_content_review_workflow
 
 router = APIRouter(tags=["Review Workflow"])
 
@@ -185,25 +186,13 @@ def initialize_content_workflow(
     if existing and existing > 0:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow already initialized for this content")
 
-    template_stages = db.scalars(
-        select(ReviewWorkflowTemplateStage)
-        .where(ReviewWorkflowTemplateStage.is_active.is_(True))
-        .order_by(ReviewWorkflowTemplateStage.stage_order.asc(), ReviewWorkflowTemplateStage.created_at.asc())
-    ).all()
+    template_stages = ensure_active_template_stages(db, created_by_id=current_user.id)
     if not template_stages:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No active workflow template stages configured")
 
-    for stage in template_stages:
-        db.add(
-            ReviewWorkflowStage(
-                content_id=content.id,
-                stage_name=stage.stage_name,
-                stage_order=stage.stage_order,
-                description=stage.description,
-                is_required=stage.is_required,
-                is_parallel=stage.is_parallel,
-            )
-        )
+    _, created = ensure_content_review_workflow(db, content, created_by_id=current_user.id)
+    if not created:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow already initialized for this content")
 
     content.status = ContentStatus.UNDER_REVIEW
 

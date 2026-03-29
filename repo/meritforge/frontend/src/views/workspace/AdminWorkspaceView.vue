@@ -58,6 +58,24 @@ const publishForm = reactive({
   durationMinutes: '120'
 })
 
+const workflowStageForm = reactive({
+  stage_name: 'Initial review',
+  stage_order: '1',
+  description: 'Default required review stage',
+  is_required: true,
+  is_parallel: false
+})
+
+const workflowInitForm = reactive({
+  contentId: ''
+})
+const workflowMessage = ref('')
+const publishingLookupForm = reactive({
+  historyContentId: '',
+  visibilityContentId: '',
+  visibilityUserId: ''
+})
+
 const auditFilters = reactive({
   user_email: '',
   action: '',
@@ -69,6 +87,12 @@ const expandedAuditId = ref<string | null>(null)
 const membershipForm = reactive({
   cohortId: '',
   userId: ''
+})
+
+const cohortForm = reactive({
+  name: '',
+  slug: '',
+  description: ''
 })
 
 const takedownForm = reactive({
@@ -226,6 +250,61 @@ async function schedulePublishing() {
   message.value = 'Publishing schedule saved.'
 }
 
+async function createWorkflowStage() {
+  workflowMessage.value = ''
+  try {
+    await store.createWorkflowTemplateStage({
+      stage_name: workflowStageForm.stage_name.trim(),
+      stage_order: Number(workflowStageForm.stage_order),
+      description: workflowStageForm.description.trim() || undefined,
+      is_required: workflowStageForm.is_required,
+      is_parallel: workflowStageForm.is_parallel
+    })
+    workflowMessage.value = 'Template stage created.'
+  } catch (error) {
+    workflowMessage.value = getApiErrorMessage(error)
+    logDevError(error)
+  }
+}
+
+async function initializeWorkflowForContent() {
+  workflowMessage.value = ''
+  const contentId = workflowInitForm.contentId.trim()
+  if (!contentId) {
+    workflowMessage.value = 'Provide a content ID to initialize workflow.'
+    return
+  }
+  try {
+    const result = await store.initializeContentWorkflow(contentId)
+    workflowMessage.value = `Workflow initialized: ${result.stages_created} stage(s) created.`
+  } catch (error) {
+    workflowMessage.value = getApiErrorMessage(error)
+    logDevError(error)
+  }
+}
+
+async function createCohort() {
+  if (!cohortForm.name.trim() || !cohortForm.slug.trim()) {
+    message.value = 'Provide cohort name and slug.'
+    return
+  }
+  try {
+    await store.createCohort({
+      name: cohortForm.name.trim(),
+      slug: cohortForm.slug.trim(),
+      description: cohortForm.description.trim() || undefined,
+      is_admin_defined: true
+    })
+    cohortForm.name = ''
+    cohortForm.slug = ''
+    cohortForm.description = ''
+    message.value = 'Cohort created.'
+  } catch (error) {
+    message.value = getApiErrorMessage(error)
+    logDevError(error)
+  }
+}
+
 async function takeDownContent() {
   if (!takedownForm.contentId.trim() || !takedownForm.reason.trim()) {
     message.value = 'Provide both content ID and takedown reason.'
@@ -258,6 +337,35 @@ async function removeMembership() {
     await store.removeUserFromCohort(membershipForm.cohortId.trim(), membershipForm.userId.trim())
     message.value = 'User removed from cohort.'
   })
+}
+
+async function loadPublishingHistory() {
+  if (!publishingLookupForm.historyContentId.trim()) {
+    message.value = 'Provide a content ID to load publishing history.'
+    return
+  }
+  try {
+    await store.loadPublishingHistory(publishingLookupForm.historyContentId.trim())
+  } catch (error) {
+    message.value = getApiErrorMessage(error)
+    logDevError(error)
+  }
+}
+
+async function checkVisibility() {
+  if (!publishingLookupForm.visibilityContentId.trim() || !publishingLookupForm.visibilityUserId.trim()) {
+    message.value = 'Provide both content ID and user ID for visibility lookup.'
+    return
+  }
+  try {
+    await store.checkCanaryVisibility(
+      publishingLookupForm.visibilityContentId.trim(),
+      publishingLookupForm.visibilityUserId.trim()
+    )
+  } catch (error) {
+    message.value = getApiErrorMessage(error)
+    logDevError(error)
+  }
 }
 
 async function applyAuditFilters() {
@@ -377,9 +485,22 @@ onMounted(async () => {
       </UICardHeader>
       <UICardContent class="space-y-3">
         <div class="rounded-lg border border-border/60 bg-background/60 p-3">
+          <p class="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Create Cohort</p>
+          <div class="grid gap-2 md:grid-cols-2">
+            <UIInput v-model="cohortForm.name" placeholder="Cohort name" />
+            <UIInput v-model="cohortForm.slug" placeholder="cohort-slug" />
+          </div>
+          <UITextarea v-model="cohortForm.description" class="mt-2" :rows="2" placeholder="Description (optional)" />
+          <UIButton size="sm" class="mt-2" @click="createCohort">Create Cohort</UIButton>
+        </div>
+
+        <div class="rounded-lg border border-border/60 bg-background/60 p-3">
           <p class="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Sensitive membership update</p>
           <div class="grid gap-2 md:grid-cols-2">
-            <UIInput v-model="membershipForm.cohortId" placeholder="Cohort ID" />
+            <select v-model="membershipForm.cohortId" class="h-10 rounded-md border border-input bg-background px-3 text-sm">
+              <option value="">Select cohort</option>
+              <option v-for="cohort in store.cohorts" :key="cohort.id" :value="cohort.id">{{ cohort.name }}</option>
+            </select>
             <UIInput v-model="membershipForm.userId" placeholder="User ID" />
           </div>
           <div class="mt-2 flex gap-2">
@@ -398,61 +519,155 @@ onMounted(async () => {
       </UICardContent>
     </UICard>
 
-    <div v-else-if="activeTab === 'publishing'" class="grid gap-5 xl:grid-cols-[1fr,1.2fr]">
+    <div v-else-if="activeTab === 'publishing'" class="space-y-5">
+      <div class="grid gap-5 xl:grid-cols-[1fr,1.2fr]">
+        <UICard class="border-border/60 bg-card/75">
+          <UICardHeader>
+            <UICardTitle class="flex items-center gap-2 text-lg"><CalendarClock class="h-5 w-5" /> Publishing Controls</UICardTitle>
+            <UICardDescription>Schedule datetime, canary percentage, and canary duration.</UICardDescription>
+          </UICardHeader>
+          <UICardContent class="space-y-3">
+            <UIInput v-model="publishForm.contentId" placeholder="Content ID" />
+            <div class="space-y-1">
+              <label class="text-xs text-muted-foreground">Publish At</label>
+              <UIInput v-model="publishForm.publishAt" type="datetime-local" />
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-muted-foreground">Unpublish At (optional)</label>
+              <UIInput v-model="publishForm.unpublishAt" type="datetime-local" />
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="space-y-1">
+                <label class="text-xs text-muted-foreground">Canary Percentage</label>
+                <UIInput v-model="publishForm.percentage" type="number" placeholder="1-100" />
+              </div>
+              <div class="space-y-1">
+                <label class="text-xs text-muted-foreground">Duration (minutes)</label>
+                <UIInput v-model="publishForm.durationMinutes" type="number" placeholder="30" />
+              </div>
+            </div>
+            <label class="flex items-center gap-2 text-sm">
+              <input v-model="publishForm.canaryEnabled" type="checkbox" />
+              Enable canary rollout
+            </label>
+            <UIButton class="w-full" @click="schedulePublishing">Save Schedule</UIButton>
+          </UICardContent>
+        </UICard>
+
       <UICard class="border-border/60 bg-card/75">
         <UICardHeader>
-          <UICardTitle class="flex items-center gap-2 text-lg"><CalendarClock class="h-5 w-5" /> Publishing Controls</UICardTitle>
-          <UICardDescription>Schedule datetime, canary percentage, and canary duration.</UICardDescription>
+          <UICardTitle class="flex items-center gap-2 text-lg"><Activity class="h-5 w-5" /> Sensitive Publishing Actions</UICardTitle>
+          </UICardHeader>
+          <UICardContent class="space-y-2">
+            <div class="rounded-lg border border-border/60 bg-background/60 p-3">
+              <p class="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Content Takedown</p>
+              <div class="space-y-2">
+                <UIInput v-model="takedownForm.contentId" placeholder="Content ID" />
+                <UITextarea v-model="takedownForm.reason" :rows="2" placeholder="Reason for takedown" />
+                <UIButton size="sm" variant="outline" @click="takeDownContent">Run Takedown</UIButton>
+              </div>
+            </div>
+
+            <p class="pt-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Recent Audit Activity</p>
+            <div v-for="log in store.auditLogs.slice(0, 10)" :key="log.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
+              <div class="flex items-center justify-between gap-2">
+                <p class="text-sm font-medium">{{ log.entity_type }}</p>
+                <UIBadge variant="outline">{{ log.action }}</UIBadge>
+              </div>
+              <p class="text-xs text-muted-foreground">{{ log.user_email || 'system' }} • {{ new Date(log.created_at).toLocaleString() }}</p>
+            </div>
+          </UICardContent>
+        </UICard>
+      </div>
+
+      <UICard class="border-border/60 bg-card/75">
+        <UICardHeader>
+          <UICardTitle>Review Workflow Setup</UICardTitle>
+          <UICardDescription>
+            Reviewers only see submissions after template stages are configured and workflow is initialized per content.
+          </UICardDescription>
         </UICardHeader>
-        <UICardContent class="space-y-3">
-          <UIInput v-model="publishForm.contentId" placeholder="Content ID" />
-          <div class="space-y-1">
-            <label class="text-xs text-muted-foreground">Publish At</label>
-            <UIInput v-model="publishForm.publishAt" type="datetime-local" />
-          </div>
-          <div class="space-y-1">
-            <label class="text-xs text-muted-foreground">Unpublish At (optional)</label>
-            <UIInput v-model="publishForm.unpublishAt" type="datetime-local" />
-          </div>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <div class="space-y-1">
-              <label class="text-xs text-muted-foreground">Canary Percentage</label>
-              <UIInput v-model="publishForm.percentage" type="number" placeholder="1-100" />
+        <UICardContent class="grid gap-4 xl:grid-cols-[1fr,1.2fr]">
+          <div class="space-y-3 rounded-lg border border-border/60 bg-background/60 p-3">
+            <p class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Create Template Stage</p>
+            <UIInput v-model="workflowStageForm.stage_name" placeholder="Stage name" />
+            <UIInput v-model="workflowStageForm.stage_order" type="number" placeholder="Stage order" />
+            <UITextarea v-model="workflowStageForm.description" :rows="2" placeholder="Description (optional)" />
+            <div class="grid gap-2 sm:grid-cols-2">
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="workflowStageForm.is_required" type="checkbox" />
+                Required stage
+              </label>
+              <label class="flex items-center gap-2 text-sm">
+                <input v-model="workflowStageForm.is_parallel" type="checkbox" />
+                Parallel approvals
+              </label>
             </div>
-            <div class="space-y-1">
-              <label class="text-xs text-muted-foreground">Duration (minutes)</label>
-              <UIInput v-model="publishForm.durationMinutes" type="number" placeholder="30" />
+            <UIButton size="sm" @click="createWorkflowStage">Create Stage</UIButton>
+          </div>
+
+          <div class="space-y-3 rounded-lg border border-border/60 bg-background/60 p-3">
+            <p class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Initialize Content Workflow</p>
+            <UIInput v-model="workflowInitForm.contentId" placeholder="Content ID (UUID)" />
+            <UIButton size="sm" variant="outline" @click="initializeWorkflowForContent">Initialize Workflow</UIButton>
+            <p v-if="workflowMessage" class="rounded-md border border-border/60 bg-card/60 px-3 py-2 text-sm text-muted-foreground">
+              {{ workflowMessage }}
+            </p>
+
+            <div class="space-y-2">
+              <p class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Active Template Stages</p>
+              <div
+                v-for="stage in store.workflowTemplateStages"
+                :key="stage.id"
+                class="rounded-md border border-border/60 bg-card/60 px-3 py-2 text-sm"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-medium">{{ stage.stage_order }}. {{ stage.stage_name }}</span>
+                  <div class="flex gap-1">
+                    <UIBadge variant="outline">{{ stage.is_required ? 'Required' : 'Optional' }}</UIBadge>
+                    <UIBadge variant="outline">{{ stage.is_parallel ? 'Parallel' : 'Sequential' }}</UIBadge>
+                  </div>
+                </div>
+                <p v-if="stage.description" class="mt-1 text-xs text-muted-foreground">{{ stage.description }}</p>
+              </div>
+              <p v-if="!store.workflowTemplateStages.length" class="text-xs text-muted-foreground">
+                No active template stages yet.
+              </p>
             </div>
           </div>
-          <label class="flex items-center gap-2 text-sm">
-            <input v-model="publishForm.canaryEnabled" type="checkbox" />
-            Enable canary rollout
-          </label>
-          <UIButton class="w-full" @click="schedulePublishing">Save Schedule</UIButton>
         </UICardContent>
       </UICard>
 
       <UICard class="border-border/60 bg-card/75">
         <UICardHeader>
-          <UICardTitle class="flex items-center gap-2 text-lg"><Activity class="h-5 w-5" /> Sensitive Publishing Actions</UICardTitle>
+          <UICardTitle>Publishing History and Visibility</UICardTitle>
+          <UICardDescription>Inspect publishing records and canary visibility from the admin workspace.</UICardDescription>
         </UICardHeader>
-        <UICardContent class="space-y-2">
-          <div class="rounded-lg border border-border/60 bg-background/60 p-3">
-            <p class="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Content Takedown</p>
-            <div class="space-y-2">
-              <UIInput v-model="takedownForm.contentId" placeholder="Content ID" />
-              <UITextarea v-model="takedownForm.reason" :rows="2" placeholder="Reason for takedown" />
-              <UIButton size="sm" variant="outline" @click="takeDownContent">Run Takedown</UIButton>
+        <UICardContent class="grid gap-4 xl:grid-cols-[1fr,1.2fr]">
+          <div class="space-y-3 rounded-lg border border-border/60 bg-background/60 p-3">
+            <p class="text-xs uppercase tracking-[0.12em] text-muted-foreground">History Lookup</p>
+            <UIInput v-model="publishingLookupForm.historyContentId" placeholder="Content ID" />
+            <UIButton size="sm" @click="loadPublishingHistory">Load History</UIButton>
+            <div v-if="store.publishingHistory.length" class="space-y-2">
+              <div v-for="entry in store.publishingHistory" :key="entry.id" class="rounded-md border border-border/60 bg-card/60 px-3 py-2 text-sm">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-medium">{{ entry.action }}</span>
+                  <span class="text-xs text-muted-foreground">{{ new Date(entry.created_at).toLocaleString() }}</span>
+                </div>
+                <p class="mt-1 text-xs text-muted-foreground">{{ entry.reason || 'No reason recorded.' }}</p>
+              </div>
             </div>
           </div>
 
-          <p class="pt-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Recent Audit Activity</p>
-          <div v-for="log in store.auditLogs.slice(0, 10)" :key="log.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
-            <div class="flex items-center justify-between gap-2">
-              <p class="text-sm font-medium">{{ log.entity_type }}</p>
-              <UIBadge variant="outline">{{ log.action }}</UIBadge>
+          <div class="space-y-3 rounded-lg border border-border/60 bg-background/60 p-3">
+            <p class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Canary Visibility Lookup</p>
+            <UIInput v-model="publishingLookupForm.visibilityContentId" placeholder="Content ID" />
+            <UIInput v-model="publishingLookupForm.visibilityUserId" placeholder="User ID" />
+            <UIButton size="sm" variant="outline" @click="checkVisibility">Check Visibility</UIButton>
+            <div v-if="store.canaryVisibilityResult" class="rounded-md border border-border/60 bg-card/60 px-3 py-2 text-sm">
+              <p class="font-medium">{{ store.canaryVisibilityResult.visible ? 'Visible' : 'Not visible' }}</p>
+              <p class="mt-1 text-xs text-muted-foreground">Reason: {{ store.canaryVisibilityResult.reason }}</p>
             </div>
-            <p class="text-xs text-muted-foreground">{{ log.user_email || 'system' }} • {{ new Date(log.created_at).toLocaleString() }}</p>
           </div>
         </UICardContent>
       </UICard>

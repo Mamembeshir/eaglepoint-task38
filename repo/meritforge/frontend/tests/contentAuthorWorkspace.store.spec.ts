@@ -39,11 +39,25 @@ describe('content author workspace store', () => {
       media_url: '   '
     })
 
-    expect(missingTitle).toBe(false)
-    expect(missingBody).toBe(false)
-    expect(missingMedia).toBe(false)
+    expect(missingTitle.ok).toBe(false)
+    expect(missingBody.ok).toBe(false)
+    expect(missingMedia.ok).toBe(false)
     expect(vi.mocked(api.post)).not.toHaveBeenCalled()
     expect(store.submitError).toBe('Media URL is required for video submissions.')
+  })
+
+  it('rejects invalid video media URL before API call', async () => {
+    const store = useContentAuthorWorkspaceStore()
+
+    const invalidUrl = await store.submitContent({
+      content_type: 'video',
+      title: 'Video title',
+      media_url: 'not-a-url'
+    })
+
+    expect(invalidUrl.ok).toBe(false)
+    expect(vi.mocked(api.post)).not.toHaveBeenCalled()
+    expect(store.submitError).toContain('Media URL must start with http:// or https://')
   })
 
   it('sets submitError when submission API call fails', async () => {
@@ -63,7 +77,7 @@ describe('content author workspace store', () => {
       body: 'Some body'
     })
 
-    expect(ok).toBe(false)
+    expect(ok.ok).toBe(false)
     expect(store.submitError).toBe('Submission failed due to policy.')
     expect(store.loading).toBe(false)
   })

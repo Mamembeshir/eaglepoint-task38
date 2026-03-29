@@ -12,11 +12,10 @@ from app.core.database import SessionLocal
 from app.core.enums import RoleType
 from app.core.security import get_password_hash
 from app.dependencies.auth import get_current_user
-from app.models.content import Content
 from app.models.risk_dictionary import RiskDictionary
 from app.models.risk_grade_rule import RiskGradeRule
 from app.models.risk_severity_weight import RiskSeverityWeight
-from app.models.review_workflow_stage import ReviewWorkflowStage
+from app.models.review_workflow_template_stage import ReviewWorkflowTemplateStage
 from app.models.role import Role
 from app.models.user import User
 
@@ -122,6 +121,14 @@ class DbBackedWorkflowIntegrationTests(unittest.TestCase):
             db.close()
 
     def test_submit_review_publish_and_telemetry_flow(self):
+        db = SessionLocal()
+        try:
+            for stage in db.scalars(select(ReviewWorkflowTemplateStage)).all():
+                db.delete(stage)
+            db.commit()
+        finally:
+            db.close()
+
         self.__class__.current_user = self.author_ctx
         submission = self.client.post(
             "/api/v1/content/submissions",
@@ -135,25 +142,18 @@ class DbBackedWorkflowIntegrationTests(unittest.TestCase):
         self.assertEqual(submission.status_code, 201)
         content_id = submission.json()["content_id"]
 
-        db = SessionLocal()
-        try:
-            content = db.scalar(select(Content).where(Content.id == content_id))
-            stage = ReviewWorkflowStage(
-                content_id=content.id,
-                stage_name="Final Review",
-                stage_order=1,
-                is_required=True,
-                is_parallel=False,
-                is_completed=False,
-            )
-            db.add(stage)
-            db.commit()
-            db.refresh(stage)
-            stage_id = stage.id
-        finally:
-            db.close()
+        reviewer_queue = self.client.get("/api/v1/review-workflow/queue")
+        self.assertEqual(reviewer_queue.status_code, 403)
 
         self.__class__.current_user = self.reviewer_ctx
+        reviewer_queue = self.client.get("/api/v1/review-workflow/queue")
+        self.assertEqual(reviewer_queue.status_code, 200)
+        queue_items = reviewer_queue.json()
+        self.assertTrue(queue_items)
+        self.assertEqual(queue_items[0]["content_id"], content_id)
+        self.assertEqual(queue_items[0]["stage_name"], "Initial Review")
+        stage_id = queue_items[0]["stage_id"]
+
         decision = self.client.post(
             f"/api/v1/review-workflow/stages/{stage_id}/decisions",
             json={"decision": "approve", "comments": "Looks good for publishing."},

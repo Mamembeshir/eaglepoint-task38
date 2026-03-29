@@ -75,11 +75,46 @@ export interface WebhookDelivery {
   created_at: string
 }
 
+export interface WorkflowTemplateStage {
+  id: string
+  stage_name: string
+  stage_order: number
+  description: string | null
+  is_required: boolean
+  is_parallel: boolean
+  is_active: boolean
+  created_by_id: string | null
+  created_at: string
+}
+
+interface WorkflowInitResponse {
+  content_id: string
+  stages_created: number
+  status: string
+}
+
 interface AuditFilters {
   user_email?: string
   action?: string
   start_at?: string
   end_at?: string
+}
+
+interface PublishingHistoryItem {
+  id: string
+  action: string
+  actor_id: string | null
+  reason: string | null
+  before_state: Record<string, unknown> | null
+  after_state: Record<string, unknown> | null
+  created_at: string
+}
+
+interface CanaryVisibilityResult {
+  content_id: string
+  user_id: string
+  visible: boolean
+  reason: string
 }
 
 export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
@@ -89,6 +124,9 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
   const auditLogs = ref<AuditLogItem[]>([])
   const webhookConfigs = ref<WebhookConfig[]>([])
   const webhookDeliveries = ref<WebhookDelivery[]>([])
+  const workflowTemplateStages = ref<WorkflowTemplateStage[]>([])
+  const publishingHistory = ref<PublishingHistoryItem[]>([])
+  const canaryVisibilityResult = ref<CanaryVisibilityResult | null>(null)
 
   async function loadRiskTerms() {
     const { data } = await api.get<RiskTerm[]>('/api/v1/admin/risk-dictionary')
@@ -128,6 +166,21 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     auditLogs.value = data.items
   }
 
+  async function loadWorkflowTemplateStages() {
+    const { data } = await api.get<WorkflowTemplateStage[]>('/api/v1/review-workflow/templates/stages')
+    workflowTemplateStages.value = data
+  }
+
+  async function createCohort(payload: {
+    name: string
+    slug: string
+    description?: string
+    is_admin_defined?: boolean
+  }) {
+    await api.post('/api/v1/cohorts', payload)
+    await loadCohorts()
+  }
+
   async function loadAll() {
     loading.value = true
     try {
@@ -136,7 +189,8 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
         loadCohorts(),
         loadAuditLogs(),
         loadWebhookConfigs(),
-        loadWebhookDeliveries()
+        loadWebhookDeliveries(),
+        loadWorkflowTemplateStages()
       ])
     } finally {
       loading.value = false
@@ -221,6 +275,33 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     await loadCohorts()
   }
 
+  async function createWorkflowTemplateStage(payload: {
+    stage_name: string
+    stage_order: number
+    description?: string
+    is_required: boolean
+    is_parallel: boolean
+  }) {
+    await api.post('/api/v1/review-workflow/templates/stages', payload)
+    await loadWorkflowTemplateStages()
+  }
+
+  async function initializeContentWorkflow(contentId: string) {
+    const { data } = await api.post<WorkflowInitResponse>(`/api/v1/review-workflow/contents/${contentId}/initialize`)
+    return data
+  }
+
+  async function loadPublishingHistory(contentId: string) {
+    const { data } = await api.get<PublishingHistoryItem[]>(`/api/v1/publishing/content/${contentId}/history`)
+    publishingHistory.value = data
+  }
+
+  async function checkCanaryVisibility(contentId: string, userId: string) {
+    const { data } = await api.get<CanaryVisibilityResult>(`/api/v1/publishing/content/${contentId}/visibility/${userId}`)
+    canaryVisibilityResult.value = data
+    return data
+  }
+
   return {
     loading,
     riskTerms,
@@ -228,11 +309,16 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     auditLogs,
     webhookConfigs,
     webhookDeliveries,
+    workflowTemplateStages,
+    publishingHistory,
+    canaryVisibilityResult,
     loadAll,
     loadRiskTerms,
     loadAuditLogs,
     loadWebhookDeliveries,
+    loadWorkflowTemplateStages,
     createRiskTerm,
+    createCohort,
     updateRiskTerm,
     deleteRiskTerm,
     createWebhook,
@@ -240,6 +326,10 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     schedulePublishing,
     takedownContent,
     assignUserToCohort,
-    removeUserFromCohort
+    removeUserFromCohort,
+    createWorkflowTemplateStage,
+    initializeContentWorkflow,
+    loadPublishingHistory,
+    checkCanaryVisibility
   }
 })

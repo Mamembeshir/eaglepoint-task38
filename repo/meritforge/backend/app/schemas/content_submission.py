@@ -42,6 +42,14 @@ class ReviewCommentOut(BaseModel):
     created_at: datetime
 
 
+class ReviewStageSummaryOut(BaseModel):
+    stage_name: str
+    stage_order: int
+    is_required: bool
+    is_parallel: bool
+    is_completed: bool
+
+
 class ContentSubmissionListItemOut(BaseModel):
     content_id: UUID
     title: str
@@ -49,6 +57,8 @@ class ContentSubmissionListItemOut(BaseModel):
     status: ContentStatus
     risk_score: int | None
     risk_grade: str | None
+    workflow_stage_count: int
+    stages: list[ReviewStageSummaryOut]
     review_comments: list[ReviewCommentOut]
     created_at: datetime
 
@@ -57,6 +67,9 @@ class ContentCatalogItemOut(BaseModel):
     id: UUID
     title: str
     content_type: ContentType
+    status: ContentStatus
     media_url: str | None
     metadata: dict | None
     summary: str | None
+    retracted_at: datetime | None = None
+    retraction_notice: str | None = None

@@ -505,6 +505,30 @@ def verify_student_milestone(
     return {"id": str(milestone.id), "is_verified": milestone.is_verified, "verified_at": milestone.verified_at}
 
 
+@router.get("/student/applications", response_model=list[ApplicationOut])
+def list_my_applications(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[ApplicationOut]:
+    rows = db.scalars(
+        select(Application)
+        .where(Application.applicant_id == current_user.id)
+        .order_by(Application.created_at.desc())
+    ).all()
+    return [
+        ApplicationOut(
+            id=row.id,
+            job_post_id=row.job_post_id,
+            applicant_id=row.applicant_id,
+            status=row.status,
+            submitted_at=row.submitted_at,
+            reviewed_at=row.reviewed_at,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
 @router.get("/employer/job-posts/{job_post_id}/milestones", response_model=list[JobMilestoneOut])
 def list_job_post_milestones(
     job_post_id: UUID,

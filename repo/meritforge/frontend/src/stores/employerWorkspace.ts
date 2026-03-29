@@ -36,6 +36,13 @@ interface Milestone {
   updated_at: string
 }
 
+interface MilestoneTemplatePayload {
+  key: string
+  name: string
+  description?: string
+  threshold_count?: number
+}
+
 export const useEmployerWorkspaceStore = defineStore('employer-workspace', () => {
   const loading = ref(false)
   const posts = ref<JobPost[]>([])
@@ -94,6 +101,12 @@ export const useEmployerWorkspaceStore = defineStore('employer-workspace', () =>
     await loadSelectedPostDetails()
   }
 
+  async function createMilestoneTemplate(payload: MilestoneTemplatePayload) {
+    if (!selectedPostId.value) return
+    await api.post(`/api/v1/employer/job-posts/${selectedPostId.value}/milestone-templates`, payload)
+    await loadSelectedPostDetails()
+  }
+
   return {
     loading,
     posts,
@@ -104,6 +117,7 @@ export const useEmployerWorkspaceStore = defineStore('employer-workspace', () =>
     createPost,
     loadSelectedPostDetails,
     updateApplicationStatus,
-    verifyMilestone
+    verifyMilestone,
+    createMilestoneTemplate
   }
 })

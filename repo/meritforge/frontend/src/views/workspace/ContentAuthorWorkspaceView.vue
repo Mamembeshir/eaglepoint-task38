@@ -18,16 +18,55 @@ const submitForm = reactive({
   media_url: ''
 })
 
+const submitStatus = reactive({
+  contentId: '',
+  message: ''
+})
+
 const selectedSubmission = computed(() => store.submissions[0] ?? null)
 
+function needsWorkflowInitialization(item: { status: string; review_comments: Array<unknown> }) {
+  return item.status === 'under_review' && item.review_comments.length === 0
+}
+
+function submissionBanner(item: { status: string; workflow_stage_count: number; review_comments: Array<unknown> }) {
+  if (!item.workflow_stage_count) {
+    return 'Submission recorded. Review workflow is still being prepared.'
+  }
+  if (needsWorkflowInitialization(item)) {
+    return 'Submission recorded and stages are ready. Waiting for reviewer decisions.'
+  }
+  if (item.status === 'needs_revision') {
+    return 'Returned for revision. Review the comments below and submit an updated version when ready.'
+  }
+  if (item.status === 'approved') {
+    return 'Approved in review. Publishing controls can now be applied when needed.'
+  }
+  return 'Review workflow is active for this submission.'
+}
+
+async function copyContentId(contentId: string) {
+  if (!contentId) return
+  try {
+    await navigator.clipboard.writeText(contentId)
+    submitStatus.message = `Content ID copied: ${contentId}`
+  } catch {
+    submitStatus.message = 'Unable to copy automatically. Select and copy the Content ID manually.'
+  }
+}
+
 async function submit() {
-  const ok = await store.submitContent({
+  submitStatus.contentId = ''
+  submitStatus.message = ''
+  const result = await store.submitContent({
     content_type: submitForm.content_type,
     title: submitForm.title,
     body: submitForm.body || undefined,
     media_url: submitForm.media_url || undefined
   })
-  if (!ok) return
+  if (!result.ok) return
+  submitStatus.contentId = result.contentId || ''
+  submitStatus.message = 'Submission created. An administrator must initialize the review workflow before this appears in the reviewer queue.'
   submitForm.title = ''
   submitForm.body = ''
   submitForm.media_url = ''
@@ -61,9 +100,19 @@ onMounted(async () => {
           <UIInput v-model="submitForm.title" placeholder="Content title" />
           <UITextarea v-model="submitForm.body" placeholder="Body (required for article/job announcement)" :rows="5" />
           <UIInput v-model="submitForm.media_url" placeholder="Media URL (required for video)" />
+          <p v-if="submitForm.content_type === 'video'" class="text-xs text-muted-foreground">
+            Paste a direct HTTP(S) link to an MP4 (or other browser-supported media file). Standard YouTube watch links do not work in the built-in player.
+          </p>
           <p v-if="store.submitError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {{ store.submitError }}
           </p>
+          <div v-if="submitStatus.message" class="rounded-md border border-border/60 bg-background/60 px-3 py-2 text-sm text-muted-foreground">
+            <p>{{ submitStatus.message }}</p>
+            <div v-if="submitStatus.contentId" class="mt-2 flex flex-wrap items-center gap-2">
+              <span class="rounded border border-border/70 bg-card px-2 py-1 font-mono text-xs">{{ submitStatus.contentId }}</span>
+              <UIButton size="sm" variant="outline" @click="copyContentId(submitStatus.contentId)">Copy Content ID</UIButton>
+            </div>
+          </div>
           <UIButton class="w-full" :disabled="store.loading" @click="submit">
             {{ store.loading ? 'Submitting...' : 'Submit for Review' }}
           </UIButton>
@@ -96,8 +145,25 @@ onMounted(async () => {
               </UIBadge>
             </div>
 
+            <p class="mb-2 rounded-md border border-border/60 bg-card/60 px-2 py-1 text-xs text-muted-foreground">
+              {{ submissionBanner(item) }}
+            </p>
+
             <div class="space-y-2">
               <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Review comments</p>
+              <p v-if="needsWorkflowInitialization(item)" class="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-700">
+                Waiting for review workflow initialization. An administrator must configure template stages and initialize workflow for this content.
+              </p>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-[11px] uppercase tracking-wide text-muted-foreground">Content ID</span>
+                <span class="rounded border border-border/70 bg-card px-2 py-0.5 font-mono text-xs">{{ item.content_id }}</span>
+                <UIButton size="sm" variant="ghost" @click="copyContentId(item.content_id)">Copy</UIButton>
+              </div>
+              <div v-if="item.stages.length" class="flex flex-wrap gap-2">
+                <UIBadge v-for="stage in item.stages" :key="`${item.content_id}-${stage.stage_order}`" variant="outline">
+                  {{ stage.stage_order }}. {{ stage.stage_name }} {{ stage.is_completed ? 'Done' : 'Pending' }}
+                </UIBadge>
+              </div>
               <div
                 v-for="comment in item.review_comments"
                 :key="`${item.content_id}-${comment.created_at}-${comment.stage_name}`"
