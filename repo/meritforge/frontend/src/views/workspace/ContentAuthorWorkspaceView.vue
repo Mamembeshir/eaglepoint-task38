@@ -21,12 +21,13 @@ const submitForm = reactive({
 const selectedSubmission = computed(() => store.submissions[0] ?? null)
 
 async function submit() {
-  await store.submitContent({
+  const ok = await store.submitContent({
     content_type: submitForm.content_type,
     title: submitForm.title,
     body: submitForm.body || undefined,
     media_url: submitForm.media_url || undefined
   })
+  if (!ok) return
   submitForm.title = ''
   submitForm.body = ''
   submitForm.media_url = ''
@@ -60,7 +61,12 @@ onMounted(async () => {
           <UIInput v-model="submitForm.title" placeholder="Content title" />
           <UITextarea v-model="submitForm.body" placeholder="Body (required for article/job announcement)" :rows="5" />
           <UIInput v-model="submitForm.media_url" placeholder="Media URL (required for video)" />
-          <UIButton class="w-full" @click="submit">Submit for Review</UIButton>
+          <p v-if="store.submitError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {{ store.submitError }}
+          </p>
+          <UIButton class="w-full" :disabled="store.loading" @click="submit">
+            {{ store.loading ? 'Submitting...' : 'Submit for Review' }}
+          </UIButton>
         </UICardContent>
       </UICard>
 

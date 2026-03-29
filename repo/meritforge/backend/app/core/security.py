@@ -91,6 +91,14 @@ def create_refresh_token(subject: str) -> tuple[str, str, datetime]:
     )
 
 
+def create_step_up_token(subject: str) -> tuple[str, str, datetime]:
+    return _create_token(
+        subject=subject,
+        token_type="step_up",
+        expires_delta=timedelta(minutes=settings.step_up_expire_minutes),
+    )
+
+
 def decode_token(token: str) -> dict:
     try:
         return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])

@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.enums import AuditAction, RoleType
 from app.core.security import (
+    create_step_up_token,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -18,10 +19,11 @@ from app.core.security import (
     verify_token_hash,
     verify_password,
 )
+from app.dependencies.auth import get_current_user
 from app.models.refresh_token import RefreshToken
 from app.models.role import Role
 from app.models.user import User
-from app.schemas.auth import AuthResponse, LoginRequest, LogoutResponse, RegisterRequest, UserAuthOut
+from app.schemas.auth import AuthResponse, LoginRequest, LogoutResponse, RegisterRequest, StepUpRequest, StepUpResponse, UserAuthOut
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -52,6 +54,20 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str,
 def _clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(settings.access_cookie_name, path="/", domain=settings.cookie_domain)
     response.delete_cookie(settings.refresh_cookie_name, path="/api/v1/auth", domain=settings.cookie_domain)
+    response.delete_cookie(settings.step_up_cookie_name, path="/api/v1", domain=settings.cookie_domain)
+
+
+def _set_step_up_cookie(response: Response, step_up_token: str, step_up_exp: datetime) -> None:
+    response.set_cookie(
+        key=settings.step_up_cookie_name,
+        value=step_up_token,
+        httponly=True,
+        secure=settings.secure_cookies,
+        samesite="strict",
+        expires=int(step_up_exp.timestamp()),
+        path="/api/v1",
+        domain=settings.cookie_domain,
+    )
 
 
 def _issue_and_store_tokens(db: Session, user: User) -> tuple[str, str, datetime, datetime]:
@@ -94,6 +110,9 @@ def _user_auth_out(user: User) -> UserAuthOut:
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, request: Request, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
+    if not settings.allow_registration:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Self-registration is currently disabled")
+
     existing_user = db.scalar(select(User).where(User.email == payload.email.lower()))
     if existing_user:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
@@ -268,3 +287,17 @@ def logout(request: Request, response: Response, db: Session = Depends(get_db)) 
 
     _clear_auth_cookies(response)
     return LogoutResponse(message="Logged out successfully")
+
+
+@router.post("/step-up", response_model=StepUpResponse)
+def confirm_step_up(
+    payload: StepUpRequest,
+    response: Response,
+    current_user: User = Depends(get_current_user),
+) -> StepUpResponse:
+    if not verify_password(payload.password, current_user.hashed_password):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid step-up credentials")
+
+    step_up_token, _, step_up_exp = create_step_up_token(subject=str(current_user.id))
+    _set_step_up_cookie(response, step_up_token, step_up_exp)
+    return StepUpResponse(message="Step-up confirmed")

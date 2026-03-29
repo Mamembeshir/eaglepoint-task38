@@ -21,6 +21,12 @@ def _parse_key_map(value: str | None) -> dict[str, str]:
     return key_map
 
 
+def _parse_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Settings:
     secret_key: str = os.getenv("SECRET_KEY", "change-me")
     algorithm: str = os.getenv("ALGORITHM", "HS256")
@@ -31,11 +37,13 @@ class Settings:
     refresh_token_hash_keys: dict[str, str] = _parse_key_map(os.getenv("REFRESH_TOKEN_HASH_KEYS"))
     refresh_token_hash_active_key_id: str = os.getenv("REFRESH_TOKEN_HASH_ACTIVE_KEY_ID", "legacy-sha256")
     refresh_token_hash_rotation_days: int = int(os.getenv("REFRESH_TOKEN_HASH_ROTATION_DAYS", "180"))
+    allow_registration: bool = _parse_bool(os.getenv("ALLOW_REGISTRATION"), True)
     secure_cookies: bool = os.getenv("SECURE_COOKIES", "true").lower() == "true"
     cookie_domain: str | None = os.getenv("COOKIE_DOMAIN")
     access_cookie_name: str = os.getenv("ACCESS_COOKIE_NAME", "access_token")
     refresh_cookie_name: str = os.getenv("REFRESH_COOKIE_NAME", "refresh_token")
-    step_up_header_name: str = os.getenv("STEP_UP_HEADER_NAME", "X-Step-Up-Password")
+    step_up_cookie_name: str = os.getenv("STEP_UP_COOKIE_NAME", "step_up_token")
+    step_up_expire_minutes: int = int(os.getenv("STEP_UP_EXPIRE_MINUTES", "5"))
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     user_rate_limit_per_minute: int = int(os.getenv("USER_RATE_LIMIT_PER_MINUTE", "120"))
     integration_hmac_keys: dict[str, str] = _parse_key_map(os.getenv("INTEGRATION_HMAC_KEYS"))

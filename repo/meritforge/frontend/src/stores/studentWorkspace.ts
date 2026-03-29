@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { api } from '@/lib/api'
+import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
 import { useAuthStore } from '@/stores/auth'
 
 type AnnotationVisibility = 'private' | 'cohort' | 'public'
@@ -84,6 +85,10 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   const annotationsByVideo = ref<Record<string, AnnotationItem[]>>({})
   const selectedVisibility = ref<AnnotationVisibilitySelection>('private')
   const selectedCohortId = ref<string>('')
+  const hydrateError = ref('')
+  const searchError = ref('')
+  const actionError = ref('')
+  const annotationsError = ref('')
 
   const currentVideo = computed(() => videos.value.find((v) => v.id === currentVideoId.value) ?? videos.value[0])
   const privateBookshelf = computed(() => videos.value.filter((v) => bookmarkedVideoIds.value.includes(v.id)))
@@ -125,17 +130,22 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
       console.warn(`[telemetry] skipped ${eventType}: missing/invalid content_id`, contentId)
       return
     }
-    await api.post('/api/v1/telemetry/events', {
-      event_type: eventType,
-      content_id: contentId,
-      resource_type: 'student_video',
-      resource_id: currentVideo.value?.id,
-      event_data: eventData
-    })
+    try {
+      await api.post('/api/v1/telemetry/events', {
+        event_type: eventType,
+        content_id: contentId,
+        resource_type: 'student_video',
+        resource_id: currentVideo.value?.id,
+        event_data: eventData
+      })
+    } catch (error) {
+      logDevError(error)
+    }
   }
 
   async function hydrateServerState() {
     if (!auth.user) return
+    hydrateError.value = ''
     loading.value = true
     try {
       const [progressRes, exportRes, milestoneRes, contentRes, bookmarksRes, subscriptionsRes] = await Promise.all([
@@ -167,6 +177,9 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
       if (!videos.value.find((video) => video.id === currentVideoId.value)) {
         currentVideoId.value = videos.value[0]?.id ?? ''
       }
+    } catch (error) {
+      hydrateError.value = getApiErrorMessage(error)
+      logDevError(error)
     } finally {
       loading.value = false
     }
@@ -174,8 +187,14 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
 
   async function loadAnnotations(contentId: string) {
     if (!isUuid(contentId)) return
-    const { data } = await api.get<AnnotationItem[]>(`/api/v1/contents/${contentId}/annotations`)
-    annotationsByVideo.value[contentId] = data
+    annotationsError.value = ''
+    try {
+      const { data } = await api.get<AnnotationItem[]>(`/api/v1/contents/${contentId}/annotations`)
+      annotationsByVideo.value[contentId] = data
+    } catch (error) {
+      annotationsError.value = getApiErrorMessage(error)
+      logDevError(error)
+    }
   }
 
   function selectVideo(videoId: string) {
@@ -202,81 +221,114 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   }
 
   async function toggleFavorite(videoId: string) {
+    actionError.value = ''
     const exists = favoriteVideoIds.value.includes(videoId)
+    const previous = [...favoriteVideoIds.value]
     favoriteVideoIds.value = exists
       ? favoriteVideoIds.value.filter((id) => id !== videoId)
       : [...favoriteVideoIds.value, videoId]
 
-    await api.post('/api/v1/bookmarks', {
-      content_id: videoId,
-      is_favorite: !exists
-    })
+    try {
+      await api.post('/api/v1/bookmarks', {
+        content_id: videoId,
+        is_favorite: !exists
+      })
 
-    await sendTelemetry('favorite', videoId, {
-      video_id: videoId,
-      is_favorite: !exists
-    })
+      await sendTelemetry('favorite', videoId, {
+        video_id: videoId,
+        is_favorite: !exists
+      })
+    } catch (error) {
+      favoriteVideoIds.value = previous
+      actionError.value = getApiErrorMessage(error)
+      logDevError(error)
+    }
   }
 
   async function toggleBookmark(videoId: string) {
+    actionError.value = ''
+    const previousBookmarked = [...bookmarkedVideoIds.value]
+    const previousFavorite = [...favoriteVideoIds.value]
     const exists = bookmarkedVideoIds.value.includes(videoId)
-    if (exists) {
-      try {
-        await api.delete(`/api/v1/bookmarks/${videoId}`)
-      } catch {
-        await api.post('/api/v1/bookmarks', {
-          content_id: videoId,
-          is_favorite: false,
-          archived: true
-        })
+    try {
+      if (exists) {
+        try {
+          await api.delete(`/api/v1/bookmarks/${videoId}`)
+        } catch {
+          await api.post('/api/v1/bookmarks', {
+            content_id: videoId,
+            is_favorite: false,
+            archived: true
+          })
+        }
+        bookmarkedVideoIds.value = bookmarkedVideoIds.value.filter((id) => id !== videoId)
+        favoriteVideoIds.value = favoriteVideoIds.value.filter((id) => id !== videoId)
+        return
       }
-      bookmarkedVideoIds.value = bookmarkedVideoIds.value.filter((id) => id !== videoId)
-      favoriteVideoIds.value = favoriteVideoIds.value.filter((id) => id !== videoId)
-      return
-    }
 
-    await api.post('/api/v1/bookmarks', {
-      content_id: videoId,
-      is_favorite: false
-    })
-    bookmarkedVideoIds.value = [...bookmarkedVideoIds.value, videoId]
+      await api.post('/api/v1/bookmarks', {
+        content_id: videoId,
+        is_favorite: false
+      })
+      bookmarkedVideoIds.value = [...bookmarkedVideoIds.value, videoId]
+    } catch (error) {
+      bookmarkedVideoIds.value = previousBookmarked
+      favoriteVideoIds.value = previousFavorite
+      actionError.value = getApiErrorMessage(error)
+      logDevError(error)
+    }
   }
 
   async function toggleTopicSubscription(topic: string) {
+    actionError.value = ''
     const normalizedTopic = topic.trim().toLowerCase()
     if (!normalizedTopic) return
     const exists = subscribedTopics.value.includes(normalizedTopic)
-    if (exists) {
-      await api.delete('/api/v1/users/me/topic-subscriptions', { params: { topic: normalizedTopic } })
-      subscribedTopics.value = subscribedTopics.value.filter((entry) => entry !== normalizedTopic)
-    } else {
-      await api.post('/api/v1/users/me/topic-subscriptions', { topic: normalizedTopic })
-      subscribedTopics.value = [...subscribedTopics.value, normalizedTopic]
+    const previous = [...subscribedTopics.value]
+    try {
+      if (exists) {
+        await api.delete('/api/v1/users/me/topic-subscriptions', { params: { topic: normalizedTopic } })
+        subscribedTopics.value = subscribedTopics.value.filter((entry) => entry !== normalizedTopic)
+      } else {
+        await api.post('/api/v1/users/me/topic-subscriptions', { topic: normalizedTopic })
+        subscribedTopics.value = [...subscribedTopics.value, normalizedTopic]
+      }
+      await sendTelemetry('search', currentVideo.value?.id, {
+        action: 'topic_subscription',
+        topic: normalizedTopic,
+        subscribed: !exists
+      })
+    } catch (error) {
+      subscribedTopics.value = previous
+      actionError.value = getApiErrorMessage(error)
+      logDevError(error)
     }
-    await sendTelemetry('search', currentVideo.value?.id, {
-      action: 'topic_subscription',
-      topic: normalizedTopic,
-      subscribed: !exists
-    })
   }
 
   async function searchContent(query: string, contentType: 'video' | 'article' | 'job_announcement' = 'video', limit = 20) {
+    searchError.value = ''
     const normalizedQuery = query.trim()
     if (!normalizedQuery) return [] as CareerVideo[]
-    const { data } = await api.get<ContentItem[]>('/api/v1/content', {
-      params: {
-        type: contentType,
-        q: normalizedQuery,
-        limit,
-        offset: 0
-      }
-    })
-    const results = (data ?? []).filter((item) => isUuid(item.id)).map((item) => mapContentToVideo(item))
-    await sendTelemetry('search', results[0]?.id ?? currentVideo.value?.id, {
-      query: normalizedQuery,
-      result_count: results.length
-    })
-    return results
+    try {
+      const { data } = await api.get<ContentItem[]>('/api/v1/content', {
+        params: {
+          type: contentType,
+          q: normalizedQuery,
+          limit,
+          offset: 0
+        }
+      })
+      const results = (data ?? []).filter((item) => isUuid(item.id)).map((item) => mapContentToVideo(item))
+      await sendTelemetry('search', results[0]?.id ?? currentVideo.value?.id, {
+        query: normalizedQuery,
+        result_count: results.length
+      })
+      return results
+    } catch (error) {
+      searchError.value = getApiErrorMessage(error)
+      logDevError(error)
+      return [] as CareerVideo[]
+    }
   }
 
   async function addAnnotation(contentId: string, text: string, selection: AnnotationSelectionPayload) {
@@ -316,6 +368,10 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     selectedVisibility,
     selectedCohortId,
     privateBookshelf,
+    hydrateError,
+    searchError,
+    actionError,
+    annotationsError,
     hydrateServerState,
     loadAnnotations,
     selectVideo,

@@ -7,6 +7,7 @@ import ThemeToggle from '@/components/app/ThemeToggle.vue'
 import { UIButton } from '@/components/ui/button'
 import { UICard, UICardContent, UICardDescription, UICardHeader, UICardTitle } from '@/components/ui/card'
 import { UIInput } from '@/components/ui/input'
+import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -25,7 +26,8 @@ async function onSubmit() {
     await auth.login(form)
     await router.push('/app')
   } catch (error) {
-    errorMessage.value = 'Unable to sign in. Check your credentials and try again.'
+    errorMessage.value = getApiErrorMessage(error)
+    logDevError(error)
   }
 }
 </script>

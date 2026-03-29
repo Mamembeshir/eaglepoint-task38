@@ -11,8 +11,10 @@ from app.core.enums import AnnotationVisibility, AuditAction, EventType, RoleTyp
 from app.dependencies.auth import get_current_user
 from app.models.annotation import Annotation
 from app.models.annotation_revision import AnnotationRevision
+from app.models.application import Application
 from app.models.content import Content
 from app.models.event_telemetry import EventTelemetry
+from app.models.job_post import JobPost
 from app.models.student_milestone_template import StudentMilestoneTemplate
 from app.models.student_progress_milestone import StudentProgressMilestone
 from app.models.student_progress_milestone_revision import StudentProgressMilestoneRevision
@@ -40,10 +42,26 @@ def _role_name(user: User) -> str | None:
     return user.role.name.value if hasattr(user.role.name, "value") else str(user.role.name)
 
 
-def _can_manage_student_progress(actor: User, student_id: UUID) -> bool:
+def _can_manage_student_progress(db: Session, actor: User, student_id: UUID) -> bool:
     if actor.id == student_id:
         return True
-    return _role_name(actor) in {RoleType.EMPLOYER_MANAGER.value, RoleType.SYSTEM_ADMINISTRATOR.value}
+
+    role_name = _role_name(actor)
+    if role_name == RoleType.SYSTEM_ADMINISTRATOR.value:
+        return True
+
+    if role_name != RoleType.EMPLOYER_MANAGER.value:
+        return False
+
+    linked_application = db.scalar(
+        select(Application.id)
+        .join(JobPost, JobPost.id == Application.job_post_id)
+        .where(
+            Application.applicant_id == student_id,
+            JobPost.created_by_id == actor.id,
+        )
+    )
+    return linked_application is not None
 
 
 def _apply_automated_milestones(db: Session, user: User, event: EventTelemetry) -> None:
@@ -252,7 +270,7 @@ def create_manual_milestone(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> MilestoneOut:
-    if not _can_manage_student_progress(current_user, student_id):
+    if not _can_manage_student_progress(db, current_user, student_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to update this student's milestones")
 
     student = db.scalar(select(User).where(User.id == student_id, User.is_active.is_(True)))
@@ -324,7 +342,7 @@ def update_milestone_latest_wins(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> MilestoneOut:
-    if not _can_manage_student_progress(current_user, student_id):
+    if not _can_manage_student_progress(db, current_user, student_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to update this student's milestones")
 
     milestone = db.scalar(
@@ -407,7 +425,7 @@ def list_student_milestones(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[MilestoneOut]:
-    if not _can_manage_student_progress(current_user, student_id):
+    if not _can_manage_student_progress(db, current_user, student_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to view this student's milestones")
 
     milestones = db.scalars(

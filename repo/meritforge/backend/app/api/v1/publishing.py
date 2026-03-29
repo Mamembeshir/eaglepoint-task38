@@ -7,11 +7,12 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit_log
 from app.core.database import get_db
-from app.core.enums import AuditAction, ContentStatus, RoleType, SegmentationType
-from app.dependencies.auth import get_current_user, require_step_up_for_takedowns
+from app.core.enums import AuditAction, ContentStatus, ContentType, RoleType, SegmentationType
+from app.dependencies.auth import get_current_user, require_roles, require_step_up_for_takedowns
 from app.models.canary_release_config import CanaryReleaseConfig
 from app.models.content import Content
 from app.models.content_risk_assessment import ContentRiskAssessment
+from app.models.job_post import JobPost
 from app.models.publishing_history import PublishingHistory
 from app.models.publishing_schedule import PublishingSchedule
 from app.models.review_decision import ReviewDecision
@@ -49,6 +50,25 @@ def _assert_publishing_role(user: User) -> None:
     }
     if _role_name(user) not in allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role permissions for publishing")
+
+
+def _assert_can_manage_content(db: Session, user: User, content: Content) -> None:
+    user_role = _role_name(user)
+    if user_role == RoleType.SYSTEM_ADMINISTRATOR.value:
+        return
+
+    if user_role == RoleType.CONTENT_AUTHOR.value:
+        if content.author_id == user.id:
+            return
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to manage this content")
+
+    if user_role == RoleType.EMPLOYER_MANAGER.value:
+        job_post = db.scalar(select(JobPost).where(JobPost.content_id == content.id))
+        if content.content_type != ContentType.JOB_ANNOUNCEMENT or not job_post or job_post.created_by_id != user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to manage this content")
+        return
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to manage this content")
 
 
 def _required_stages_complete(db: Session, content_id: UUID) -> bool:
@@ -95,6 +115,7 @@ def schedule_publishing(
     content = db.scalar(select(Content).where(Content.id == content_id))
     if not content:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+    _assert_can_manage_content(db, current_user, content)
 
     if payload.scheduled_unpublish_at and payload.scheduled_unpublish_at <= payload.scheduled_publish_at:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="scheduled_unpublish_at must be after scheduled_publish_at")
@@ -247,6 +268,7 @@ def takedown_content(
     content = db.scalar(select(Content).where(Content.id == content_id))
     if not content:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+    _assert_can_manage_content(db, current_user, content)
 
     now = datetime.now(timezone.utc)
     before = {
@@ -325,7 +347,7 @@ def check_canary_visibility(
 def get_publishing_history(
     content_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_roles(RoleType.SYSTEM_ADMINISTRATOR)),
 ) -> list[PublishingHistoryOut]:
     history_rows = db.scalars(
         select(PublishingHistory)

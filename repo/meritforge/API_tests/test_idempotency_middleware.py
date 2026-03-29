@@ -20,6 +20,14 @@ class _FakeAsyncRedis:
         return True
 
 
+class _FailingAsyncRedis:
+    async def get(self, _key: str):
+        raise RuntimeError("redis unavailable")
+
+    async def set(self, _key: str, _value: str, ex: int | None = None):
+        raise RuntimeError("redis unavailable")
+
+
 class IdempotencyMiddlewareApiTests(unittest.TestCase):
     def setUp(self):
         self.redis_patch = patch("app.core.idempotency.redis_async.from_url", return_value=_FakeAsyncRedis())
@@ -53,6 +61,27 @@ class IdempotencyMiddlewareApiTests(unittest.TestCase):
         second = self.client.post("/idempotency/echo", json={"value": 2}, headers={"Idempotency-Key": key})
 
         self.assertEqual(second.status_code, 409)
+
+    def test_redis_failure_fails_open(self):
+        self.redis_patch.stop()
+        self.redis_patch = patch("app.core.idempotency.redis_async.from_url", return_value=_FailingAsyncRedis())
+        self.redis_patch.start()
+
+        app = FastAPI()
+        app.add_middleware(IdempotencyMiddleware, redis_url="redis://ignored")
+
+        @app.post("/idempotency/echo-fail-open")
+        def echo(payload: dict) -> dict:
+            return {"ok": True, "echo": payload}
+
+        client = TestClient(app)
+        response = client.post(
+            "/idempotency/echo-fail-open",
+            json={"value": 1},
+            headers={"Idempotency-Key": f"idem-{uuid.uuid4()}"},
+        )
+
+        self.assertEqual(response.status_code, 200)
 
 
 if __name__ == "__main__":

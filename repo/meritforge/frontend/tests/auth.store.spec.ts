@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
 }))
 
 import { api } from '@/lib/api'
+import { getProfileBackupKey } from '@/lib/profileBackup'
 import { useAuthStore } from '@/stores/auth'
 
 describe('auth store', () => {
@@ -43,11 +44,14 @@ describe('auth store', () => {
     expect(store.isAuthenticated).toBe(true)
     expect(store.user?.email).toBe('student@example.com')
 
+    localStorage.setItem(getProfileBackupKey(user.id), '{"backup":true}')
+
     vi.mocked(api.post).mockResolvedValueOnce({ data: {} } as never)
     await store.logout()
 
     expect(store.isAuthenticated).toBe(false)
     expect(store.user).toBeNull()
     expect(vi.mocked(api.post)).toHaveBeenLastCalledWith('/api/v1/auth/logout')
+    expect(localStorage.getItem(getProfileBackupKey(user.id))).toBeNull()
   })
 })

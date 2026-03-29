@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 import { api } from '@/lib/api'
+import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
 
 interface ReviewQueueItem {
   stage_id: string
@@ -21,6 +22,7 @@ interface ReviewQueueItem {
 export const useReviewerWorkspaceStore = defineStore('reviewer-workspace', () => {
   const loading = ref(false)
   const queue = ref<ReviewQueueItem[]>([])
+  const actionError = ref('')
 
   async function loadQueue() {
     loading.value = true
@@ -33,26 +35,46 @@ export const useReviewerWorkspaceStore = defineStore('reviewer-workspace', () =>
   }
 
   async function approve(stageId: string, comments?: string) {
-    await api.post(`/api/v1/review-workflow/stages/${stageId}/decisions`, {
-      decision: 'approve',
-      comments: comments || null
-    })
-    await loadQueue()
+    actionError.value = ''
+    try {
+      await api.post(`/api/v1/review-workflow/stages/${stageId}/decisions`, {
+        decision: 'approve',
+        comments: comments || null
+      })
+      await loadQueue()
+      return true
+    } catch (error) {
+      actionError.value = getApiErrorMessage(error)
+      logDevError(error)
+      return false
+    }
   }
 
   async function returnForRevision(stageId: string, comments: string) {
     const comment = comments.trim()
-    const ensured = comment.length >= 20 ? comment : `${comment} ${'Please revise and resubmit with required corrections.'}`
-    await api.post(`/api/v1/review-workflow/stages/${stageId}/decisions`, {
-      decision: 'return_for_revision',
-      comments: ensured
-    })
-    await loadQueue()
+    actionError.value = ''
+    if (comment.length < 20) {
+      actionError.value = 'Provide at least 20 characters explaining why it must be revised.'
+      return false
+    }
+    try {
+      await api.post(`/api/v1/review-workflow/stages/${stageId}/decisions`, {
+        decision: 'return_for_revision',
+        comments: comment
+      })
+      await loadQueue()
+      return true
+    } catch (error) {
+      actionError.value = getApiErrorMessage(error)
+      logDevError(error)
+      return false
+    }
   }
 
   return {
     loading,
     queue,
+    actionError,
     loadQueue,
     approve,
     returnForRevision

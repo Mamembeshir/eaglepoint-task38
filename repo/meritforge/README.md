@@ -21,6 +21,8 @@ Multiple users can access the platform simultaneously from different devices:
 - Example: `https://192.168.1.100` (frontend + API through nginx)
 - Shared database ensures real-time data consistency across all connected devices
 
+MeritForge is currently single-tenant. Data isolation is enforced by authenticated user identity, role checks, and resource ownership (for example employer-owned job resources and self-scoped student progress/profile routes), not by a SaaS multi-tenant `tenant_id` model.
+
 ### Container Services
 
 | Service | Published Port | Purpose |
@@ -151,7 +153,21 @@ Security controls note:
 
 - Passwords are stored as salted hashes with optional pepper.
 - Refresh tokens are stored as keyed hashes (HMAC/legacy hash fallback), not raw values.
+- Step-up confirmation uses `POST /api/v1/auth/step-up` with password in JSON body and a short-lived httpOnly cookie proof for sensitive actions.
+- If your reverse proxy or ingress can log request bodies, disable full-body logging for auth and step-up routes to avoid capturing passwords.
+- Annotations support `private`, `cohort`, and `public` visibility. `public` annotations are visible to all authenticated users and should only be used for intentionally shared notes.
 - These controls protect secrets in the application database layer; they are not filesystem/disk encryption at the OS level.
+
+On-prem / integration (HMAC):
+
+- Integration requests require `X-MeritForge-Key-Id`, `X-MeritForge-Timestamp`, and `X-MeritForge-Signature` headers.
+- Configure key pairs in `INTEGRATION_HMAC_KEYS` as `key_id:secret` entries (comma-separated for rotation).
+- Available HMAC routes include `POST /api/v1/integration/echo` and `GET /api/v1/integration/published-content`.
+- Signature format is `<timestamp>.<canonical_json_body>`, where JSON is serialized with sorted keys and compact separators.
+
+Idempotency caveat:
+
+- Without an access cookie, idempotency keys are scoped by client IP (`ip:<address>`), so users behind shared NAT/proxy can collide on the same `Idempotency-Key`.
 
 ## Local HTTPS Setup (Optional Override)
 
@@ -205,6 +221,7 @@ Set `CORS_ORIGINS` as a comma-separated list for allowed browser origins (exampl
 For local verbose error output, set `DEBUG=true` explicitly in `.env` (default compose behavior is `DEBUG=false`).
 Set `VITE_API_URL` to empty for Docker/nginx same-origin (`/api/v1/...` paths). For standalone local Vite dev without nginx, set `VITE_API_URL=http://localhost:8000`.
 `REFRESH_TOKEN_HASH_ROTATION_DAYS` is an operational policy window; rotate `REFRESH_TOKEN_HASH_ACTIVE_KEY_ID` and keep prior keys in `REFRESH_TOKEN_HASH_KEYS` manually on that cadence.
+Set `ALLOW_REGISTRATION=false` to disable self-registration (`POST /api/v1/auth/register` returns `403`).
 
 ### Running Services
 

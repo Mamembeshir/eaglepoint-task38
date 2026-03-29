@@ -206,6 +206,21 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     await loadAuditLogs()
   }
 
+  async function takedownContent(contentId: string, reason: string) {
+    await api.post(`/api/v1/publishing/content/${contentId}/takedown`, { reason })
+    await loadAuditLogs()
+  }
+
+  async function assignUserToCohort(cohortId: string, userId: string) {
+    await api.post(`/api/v1/cohorts/${cohortId}/users/${userId}`)
+    await loadCohorts()
+  }
+
+  async function removeUserFromCohort(cohortId: string, userId: string) {
+    await api.delete(`/api/v1/cohorts/${cohortId}/users/${userId}`)
+    await loadCohorts()
+  }
+
   return {
     loading,
     riskTerms,
@@ -222,6 +237,9 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     deleteRiskTerm,
     createWebhook,
     retryWebhookDelivery,
-    schedulePublishing
+    schedulePublishing,
+    takedownContent,
+    assignUserToCohort,
+    removeUserFromCohort
   }
 })

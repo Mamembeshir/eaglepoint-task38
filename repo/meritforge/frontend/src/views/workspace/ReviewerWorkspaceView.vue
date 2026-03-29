@@ -12,13 +12,17 @@ const store = useReviewerWorkspaceStore()
 const commentsByStage = reactive<Record<string, string>>({})
 
 async function approve(stageId: string) {
-  await store.approve(stageId, commentsByStage[stageId] || undefined)
-  commentsByStage[stageId] = ''
+  const ok = await store.approve(stageId, commentsByStage[stageId] || undefined)
+  if (ok) {
+    commentsByStage[stageId] = ''
+  }
 }
 
 async function returnForRevision(stageId: string) {
-  await store.returnForRevision(stageId, commentsByStage[stageId] || '')
-  commentsByStage[stageId] = ''
+  const ok = await store.returnForRevision(stageId, commentsByStage[stageId] || '')
+  if (ok) {
+    commentsByStage[stageId] = ''
+  }
 }
 
 onMounted(async () => {
@@ -40,6 +44,10 @@ onMounted(async () => {
         <UICardDescription>Items awaiting reviewer decisions across workflow stages.</UICardDescription>
       </UICardHeader>
       <UICardContent class="space-y-4">
+        <p v-if="store.actionError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {{ store.actionError }}
+        </p>
+
         <div
           v-for="item in store.queue"
           :key="item.stage_id"
@@ -68,6 +76,9 @@ onMounted(async () => {
               placeholder="Add reviewer context (required for Return for Revision)"
               :rows="3"
             />
+            <p class="mt-1 text-xs text-muted-foreground">
+              {{ (commentsByStage[item.stage_id] || '').trim().length }}/20 minimum characters for return-for-revision
+            </p>
           </div>
 
           <div class="flex flex-wrap gap-2">
@@ -75,7 +86,13 @@ onMounted(async () => {
               <Check class="h-4 w-4" />
               Approve
             </UIButton>
-            <UIButton size="sm" variant="outline" class="gap-2" @click="returnForRevision(item.stage_id)">
+            <UIButton
+              size="sm"
+              variant="outline"
+              class="gap-2"
+              :disabled="(commentsByStage[item.stage_id] || '').trim().length < 20"
+              @click="returnForRevision(item.stage_id)"
+            >
               <CornerDownLeft class="h-4 w-4" />
               Return for Revision
             </UIButton>

@@ -1,14 +1,14 @@
 from typing import Callable
 from uuid import UUID
 
-from fastapi import Cookie, Depends, Header, HTTPException, status
+from fastapi import Cookie, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.enums import RoleType
-from app.core.security import decode_token, verify_password
+from app.core.security import decode_token
 from app.models.user import User
 
 
@@ -58,17 +58,25 @@ def require_roles(*required_roles: RoleType | str) -> Callable:
 
 
 def require_step_up_confirmation(
+    response: Response,
     current_user: User = Depends(get_current_user),
-    step_up_password: str | None = Header(default=None, alias=settings.step_up_header_name),
+    step_up_token: str | None = Cookie(default=None, alias=settings.step_up_cookie_name),
 ) -> User:
-    if not step_up_password:
+    if not step_up_token:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Step-up confirmation required: provide password in X-Step-Up-Password header",
+            detail="Step-up confirmation required",
         )
 
-    if not verify_password(step_up_password, current_user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid step-up credentials")
+    try:
+        payload = decode_token(step_up_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid step-up confirmation") from exc
+
+    if payload.get("type") != "step_up" or payload.get("sub") != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid step-up confirmation")
+
+    response.delete_cookie(settings.step_up_cookie_name, path="/api/v1", domain=settings.cookie_domain)
 
     return current_user
 

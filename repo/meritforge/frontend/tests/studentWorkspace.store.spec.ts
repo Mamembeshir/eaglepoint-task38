@@ -125,4 +125,22 @@ describe('student workspace store', () => {
       tags: []
     })
   })
+
+  it('sets hydrate error and clears loading when hydrate fails', async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: [] } as never)
+    vi.mocked(api.get).mockRejectedValueOnce({
+      isAxiosError: true,
+      response: {
+        data: {
+          detail: 'Cannot load workspace right now.'
+        }
+      }
+    })
+
+    const store = useStudentWorkspaceStore()
+    await store.hydrateServerState()
+
+    expect(store.loading).toBe(false)
+    expect(store.hydrateError).toBe('Cannot load workspace right now.')
+  })
 })

@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { reactive, ref } from 'vue'
 
 import { api } from '@/lib/api'
+import { getProfileBackupKey } from '@/lib/profileBackup'
+import { useAuthStore } from '@/stores/auth'
 
 interface UserProfile {
   id: string
@@ -26,9 +28,16 @@ interface ExportPayload {
   cohorts: Array<Record<string, unknown>>
 }
 
-const LOCAL_BACKUP_KEY = 'meritforge.localExportBackup.v1'
+interface DeletionStatus {
+  user_id: string
+  is_marked_for_deletion: boolean
+  deletion_requested_at: string
+  scheduled_deletion_at: string
+  reason: string
+}
 
 export const useProfileWorkspaceStore = defineStore('profile-workspace', () => {
+  const auth = useAuthStore()
   const loading = ref(false)
   const profile = ref<UserProfile | null>(null)
   const consentForm = reactive({
@@ -37,6 +46,12 @@ export const useProfileWorkspaceStore = defineStore('profile-workspace', () => {
     consent_analytics: false,
     consent_data_portability: false
   })
+
+  function getActiveBackupKey() {
+    const userId = profile.value?.id || auth.user?.id
+    if (!userId) return null
+    return getProfileBackupKey(userId)
+  }
 
   function syncConsentForm() {
     if (!profile.value) return
@@ -94,14 +109,28 @@ export const useProfileWorkspaceStore = defineStore('profile-workspace', () => {
     syncConsentForm()
   }
 
+  async function markAccountForDeletion(reason: string) {
+    const { data } = await api.post<DeletionStatus>('/api/v1/users/me/deletion/mark', { reason })
+    return data
+  }
+
   function saveLocalBackup(payload: ExportPayload) {
-    localStorage.setItem(LOCAL_BACKUP_KEY, JSON.stringify(payload))
+    const key = getActiveBackupKey()
+    if (!key) return
+    localStorage.setItem(key, JSON.stringify(payload))
   }
 
   function loadLocalBackup(): ExportPayload | null {
-    const raw = localStorage.getItem(LOCAL_BACKUP_KEY)
+    const key = getActiveBackupKey()
+    if (!key) return null
+    const raw = localStorage.getItem(key)
     if (!raw) return null
     return JSON.parse(raw) as ExportPayload
+  }
+
+  function clearLocalBackup(userId: string | null | undefined) {
+    if (!userId) return
+    localStorage.removeItem(getProfileBackupKey(userId))
   }
 
   return {
@@ -112,7 +141,9 @@ export const useProfileWorkspaceStore = defineStore('profile-workspace', () => {
     saveConsentSettings,
     exportFromServer,
     importToServer,
+    markAccountForDeletion,
     saveLocalBackup,
-    loadLocalBackup
+    loadLocalBackup,
+    clearLocalBackup
   }
 })

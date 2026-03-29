@@ -69,6 +69,9 @@ def get_my_profile(current_user: User = Depends(get_current_user)) -> UserProfil
 
 @router.get("/users/{user_id}", response_model=UserProfileOut)
 def get_user_profile(user_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> UserProfileOut:
+    if user_id != current_user.id and not _is_admin(current_user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to access this user profile")
+
     user = db.scalar(select(User).where(User.id == user_id, User.is_active.is_(True)))
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

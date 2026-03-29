@@ -5,11 +5,18 @@ import { onMounted, ref } from 'vue'
 import { UIButton } from '@/components/ui/button'
 import { UICard, UICardContent, UICardDescription, UICardHeader, UICardTitle } from '@/components/ui/card'
 import { UITextarea } from '@/components/ui/textarea'
+import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
+import { confirmStepUp } from '@/lib/stepUp'
 import { useProfileWorkspaceStore } from '@/stores/profileWorkspace'
+import StepUpConfirmationModal from '@/components/app/StepUpConfirmationModal.vue'
 
 const store = useProfileWorkspaceStore()
 const importJsonText = ref('')
 const message = ref('')
+const deletionReason = ref('')
+const stepUpOpen = ref(false)
+const stepUpLoading = ref(false)
+const stepUpError = ref('')
 
 function downloadJson(payload: unknown, filename: string) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
@@ -35,9 +42,45 @@ async function saveConsents() {
 }
 
 async function importData() {
-  const parsed = JSON.parse(importJsonText.value)
-  await store.importToServer(parsed, 'local_fallback')
-  message.value = 'Import completed and profile updated.'
+  try {
+    const parsed = JSON.parse(importJsonText.value)
+    await store.importToServer(parsed, 'local_fallback')
+    message.value = 'Import completed and profile updated.'
+  } catch (error) {
+    message.value = getApiErrorMessage(error)
+    logDevError(error)
+  }
+}
+
+function requestDeletion() {
+  if (!deletionReason.value.trim()) {
+    message.value = 'Provide a deletion reason before confirming.'
+    return
+  }
+  stepUpError.value = ''
+  stepUpOpen.value = true
+}
+
+function cancelStepUp() {
+  stepUpOpen.value = false
+  stepUpError.value = ''
+}
+
+async function confirmDeletion(password: string) {
+  stepUpLoading.value = true
+  stepUpError.value = ''
+  try {
+    await confirmStepUp(password)
+    await store.markAccountForDeletion(deletionReason.value.trim())
+    message.value = 'Your account has been marked for deletion.'
+    deletionReason.value = ''
+    cancelStepUp()
+  } catch (error) {
+    stepUpError.value = getApiErrorMessage(error)
+    logDevError(error)
+  } finally {
+    stepUpLoading.value = false
+  }
 }
 
 function onImportFileChange(event: Event) {
@@ -126,6 +169,28 @@ onMounted(async () => {
       </UICardContent>
     </UICard>
 
+    <UICard class="border-border/60 bg-card/75">
+      <UICardHeader>
+        <UICardTitle>Sensitive Actions</UICardTitle>
+        <UICardDescription>Account deletion requires step-up confirmation.</UICardDescription>
+      </UICardHeader>
+      <UICardContent class="space-y-3">
+        <UITextarea v-model="deletionReason" :rows="3" placeholder="Reason for deleting your account" />
+        <UIButton variant="outline" class="w-full sm:w-auto" @click="requestDeletion">Mark Account for Deletion</UIButton>
+      </UICardContent>
+    </UICard>
+
     <p v-if="message" class="text-sm text-muted-foreground">{{ message }}</p>
+
+    <StepUpConfirmationModal
+      :open="stepUpOpen"
+      title="Confirm Account Deletion"
+      description="Re-enter your password to mark this account for deletion."
+      confirm-label="Confirm deletion"
+      :loading="stepUpLoading"
+      :error-message="stepUpError"
+      @cancel="cancelStepUp"
+      @confirm="confirmDeletion"
+    />
   </section>
 </template>

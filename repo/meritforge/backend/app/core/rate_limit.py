@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import logging
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -7,6 +8,9 @@ from redis import asyncio as redis_async
 
 from app.core.config import settings
 from app.core.security import decode_token
+
+
+logger = logging.getLogger("meritforge.middleware")
 
 
 class UserRateLimitMiddleware(BaseHTTPMiddleware):
@@ -30,17 +34,23 @@ class UserRateLimitMiddleware(BaseHTTPMiddleware):
 
         minute_key = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
         key = f"rate_limit:{identifier}:{minute_key}"
-        current = await self.redis.incr(key)
-        if current == 1:
-            await self.redis.expire(key, 60)
-        if current > self.limit_per_minute:
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "detail": "Rate limit exceeded",
-                    "limit": self.limit_per_minute,
-                    "window": "1 minute",
-                },
+        try:
+            current = await self.redis.incr(key)
+            if current == 1:
+                await self.redis.expire(key, 60)
+            if current > self.limit_per_minute:
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": "Rate limit exceeded",
+                        "limit": self.limit_per_minute,
+                        "window": "1 minute",
+                    },
+                )
+        except Exception:
+            logger.warning(
+                "rate_limit_redis_unavailable_fail_open",
+                extra={"path": request.url.path, "identifier": identifier},
             )
 
         return await call_next(request)

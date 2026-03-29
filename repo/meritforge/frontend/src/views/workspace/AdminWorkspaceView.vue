@@ -7,7 +7,10 @@ import { UIButton } from '@/components/ui/button'
 import { UICard, UICardContent, UICardDescription, UICardHeader, UICardTitle } from '@/components/ui/card'
 import { UIInput } from '@/components/ui/input'
 import { UITextarea } from '@/components/ui/textarea'
+import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
+import { confirmStepUp } from '@/lib/stepUp'
 import { useAdminWorkspaceStore } from '@/stores/adminWorkspace'
+import StepUpConfirmationModal from '@/components/app/StepUpConfirmationModal.vue'
 
 const store = useAdminWorkspaceStore()
 
@@ -62,6 +65,50 @@ const auditFilters = reactive({
   end_at: ''
 })
 const expandedAuditId = ref<string | null>(null)
+
+const membershipForm = reactive({
+  cohortId: '',
+  userId: ''
+})
+
+const takedownForm = reactive({
+  contentId: '',
+  reason: ''
+})
+
+const stepUpOpen = ref(false)
+const stepUpLoading = ref(false)
+const stepUpError = ref('')
+let stepUpAction: (() => Promise<void>) | null = null
+
+function openStepUp(action: () => Promise<void>) {
+  stepUpError.value = ''
+  stepUpAction = action
+  stepUpOpen.value = true
+}
+
+function cancelStepUp() {
+  stepUpOpen.value = false
+  stepUpError.value = ''
+  stepUpAction = null
+}
+
+async function onStepUpConfirm(password: string) {
+  stepUpLoading.value = true
+  stepUpError.value = ''
+  try {
+    await confirmStepUp(password)
+    if (stepUpAction) {
+      await stepUpAction()
+    }
+    cancelStepUp()
+  } catch (error) {
+    stepUpError.value = getApiErrorMessage(error)
+    logDevError(error)
+  } finally {
+    stepUpLoading.value = false
+  }
+}
 
 function toIsoDateTime(localDateTime: string) {
   if (!localDateTime) return undefined
@@ -179,6 +226,40 @@ async function schedulePublishing() {
   message.value = 'Publishing schedule saved.'
 }
 
+async function takeDownContent() {
+  if (!takedownForm.contentId.trim() || !takedownForm.reason.trim()) {
+    message.value = 'Provide both content ID and takedown reason.'
+    return
+  }
+  openStepUp(async () => {
+    await store.takedownContent(takedownForm.contentId.trim(), takedownForm.reason.trim())
+    message.value = 'Content takedown completed.'
+    takedownForm.reason = ''
+  })
+}
+
+async function assignMembership() {
+  if (!membershipForm.cohortId.trim() || !membershipForm.userId.trim()) {
+    message.value = 'Provide cohort ID and user ID.'
+    return
+  }
+  openStepUp(async () => {
+    await store.assignUserToCohort(membershipForm.cohortId.trim(), membershipForm.userId.trim())
+    message.value = 'User assigned to cohort.'
+  })
+}
+
+async function removeMembership() {
+  if (!membershipForm.cohortId.trim() || !membershipForm.userId.trim()) {
+    message.value = 'Provide cohort ID and user ID.'
+    return
+  }
+  openStepUp(async () => {
+    await store.removeUserFromCohort(membershipForm.cohortId.trim(), membershipForm.userId.trim())
+    message.value = 'User removed from cohort.'
+  })
+}
+
 async function applyAuditFilters() {
   await store.loadAuditLogs({
     user_email: auditFilters.user_email || undefined,
@@ -189,7 +270,12 @@ async function applyAuditFilters() {
 }
 
 onMounted(async () => {
-  await store.loadAll()
+  try {
+    await store.loadAll()
+  } catch (error) {
+    message.value = getApiErrorMessage(error)
+    logDevError(error)
+  }
 })
 </script>
 
@@ -290,6 +376,18 @@ onMounted(async () => {
         <UICardTitle class="flex items-center gap-2 text-lg"><Users class="h-5 w-5" /> Cohort Management</UICardTitle>
       </UICardHeader>
       <UICardContent class="space-y-3">
+        <div class="rounded-lg border border-border/60 bg-background/60 p-3">
+          <p class="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Sensitive membership update</p>
+          <div class="grid gap-2 md:grid-cols-2">
+            <UIInput v-model="membershipForm.cohortId" placeholder="Cohort ID" />
+            <UIInput v-model="membershipForm.userId" placeholder="User ID" />
+          </div>
+          <div class="mt-2 flex gap-2">
+            <UIButton size="sm" @click="assignMembership">Assign</UIButton>
+            <UIButton size="sm" variant="outline" @click="removeMembership">Remove</UIButton>
+          </div>
+        </div>
+
         <div v-for="cohort in store.cohorts" :key="cohort.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
           <div class="mb-1 flex items-center justify-between">
             <p class="font-medium">{{ cohort.name }}</p>
@@ -336,9 +434,19 @@ onMounted(async () => {
 
       <UICard class="border-border/60 bg-card/75">
         <UICardHeader>
-          <UICardTitle class="flex items-center gap-2 text-lg"><Activity class="h-5 w-5" /> Recent Audit Activity</UICardTitle>
+          <UICardTitle class="flex items-center gap-2 text-lg"><Activity class="h-5 w-5" /> Sensitive Publishing Actions</UICardTitle>
         </UICardHeader>
         <UICardContent class="space-y-2">
+          <div class="rounded-lg border border-border/60 bg-background/60 p-3">
+            <p class="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Content Takedown</p>
+            <div class="space-y-2">
+              <UIInput v-model="takedownForm.contentId" placeholder="Content ID" />
+              <UITextarea v-model="takedownForm.reason" :rows="2" placeholder="Reason for takedown" />
+              <UIButton size="sm" variant="outline" @click="takeDownContent">Run Takedown</UIButton>
+            </div>
+          </div>
+
+          <p class="pt-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Recent Audit Activity</p>
           <div v-for="log in store.auditLogs.slice(0, 10)" :key="log.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
             <div class="flex items-center justify-between gap-2">
               <p class="text-sm font-medium">{{ log.entity_type }}</p>
@@ -475,5 +583,16 @@ onMounted(async () => {
         </UICardContent>
       </UICard>
     </div>
+
+    <StepUpConfirmationModal
+      :open="stepUpOpen"
+      title="Step-up confirmation"
+      description="Re-enter your password to continue with this sensitive action."
+      confirm-label="Confirm action"
+      :loading="stepUpLoading"
+      :error-message="stepUpError"
+      @cancel="cancelStepUp"
+      @confirm="onStepUpConfirm"
+    />
   </section>
 </template>

@@ -152,5 +152,68 @@ class IntegrationHmacApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_read_only_published_content_endpoint_requires_valid_hmac(self):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        signature = _sign("integration-secret-a", timestamp, {})
+
+        response = self.client.get(
+            "/api/v1/integration/published-content?limit=10&offset=0",
+            headers={
+                "X-MeritForge-Key-Id": "integration-key-a",
+                "X-MeritForge-Timestamp": timestamp,
+                "X-MeritForge-Signature": signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertIn("items", body)
+
+    def test_read_only_published_content_endpoint_rejects_bad_signature(self):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        bad_signature = _sign("wrong-secret", timestamp, {})
+
+        response = self.client.get(
+            "/api/v1/integration/published-content",
+            headers={
+                "X-MeritForge-Key-Id": "integration-key-a",
+                "X-MeritForge-Timestamp": timestamp,
+                "X-MeritForge-Signature": bad_signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_read_only_published_content_endpoint_rejects_stale_timestamp(self):
+        stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=600)).isoformat()
+        signature = _sign("integration-secret-a", stale_ts, {})
+
+        response = self.client.get(
+            "/api/v1/integration/published-content",
+            headers={
+                "X-MeritForge-Key-Id": "integration-key-a",
+                "X-MeritForge-Timestamp": stale_ts,
+                "X-MeritForge-Signature": signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_read_only_published_content_endpoint_rejects_wrong_key_id(self):
+        timestamp = datetime.now(timezone.utc).isoformat()
+        signature = _sign("integration-secret-a", timestamp, {})
+
+        response = self.client.get(
+            "/api/v1/integration/published-content",
+            headers={
+                "X-MeritForge-Key-Id": "nonexistent-key",
+                "X-MeritForge-Timestamp": timestamp,
+                "X-MeritForge-Signature": signature,
+            },
+        )
+
+        self.assertEqual(response.status_code, 401)
+
 if __name__ == "__main__":
     unittest.main()

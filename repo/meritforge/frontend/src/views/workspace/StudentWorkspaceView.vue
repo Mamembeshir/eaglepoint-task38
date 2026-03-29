@@ -17,6 +17,7 @@ import { UIButton } from '@/components/ui/button'
 import { UICard, UICardContent, UICardDescription, UICardHeader, UICardTitle } from '@/components/ui/card'
 import { UIInput } from '@/components/ui/input'
 import { UITextarea } from '@/components/ui/textarea'
+import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
 import { useStudentWorkspaceStore } from '@/stores/studentWorkspace'
 
 const workspace = useStudentWorkspaceStore()
@@ -33,6 +34,7 @@ const selectedHighlightedText = ref('')
 const searchQuery = ref('')
 const searchResults = ref<Array<{ id: string; title: string; topic: string; durationSeconds: number }>>([])
 const searching = ref(false)
+const pageError = ref('')
 let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 let lastTelemetryTick = 0
 
@@ -95,7 +97,8 @@ async function saveAnnotation() {
     selectedEndOffset.value = null
     selectedHighlightedText.value = ''
   } catch (error) {
-    annotationError.value = error instanceof Error ? error.message : 'Unable to save annotation.'
+    annotationError.value = getApiErrorMessage(error)
+    logDevError(error)
   } finally {
     annotationSaving.value = false
   }
@@ -157,6 +160,9 @@ watch(
           topic: item.topic,
           durationSeconds: item.durationSeconds
         }))
+      } catch (error) {
+        pageError.value = getApiErrorMessage(error)
+        logDevError(error)
       } finally {
         searching.value = false
       }
@@ -167,7 +173,13 @@ watch(
 watch(
   () => workspace.currentVideoId,
   async (videoId) => {
-    await workspace.loadAnnotations(videoId)
+    pageError.value = ''
+    try {
+      await workspace.loadAnnotations(videoId)
+    } catch (error) {
+      pageError.value = getApiErrorMessage(error)
+      logDevError(error)
+    }
     selectedStartOffset.value = null
     selectedEndOffset.value = null
     selectedHighlightedText.value = ''
@@ -179,9 +191,15 @@ watch(
 )
 
 onMounted(async () => {
-  await workspace.hydrateServerState()
-  if (workspace.currentVideo) {
-    await workspace.loadAnnotations(workspace.currentVideo.id)
+  pageError.value = ''
+  try {
+    await workspace.hydrateServerState()
+    if (workspace.currentVideo) {
+      await workspace.loadAnnotations(workspace.currentVideo.id)
+    }
+  } catch (error) {
+    pageError.value = getApiErrorMessage(error)
+    logDevError(error)
   }
 })
 </script>
@@ -201,6 +219,22 @@ onMounted(async () => {
       <UIButton :variant="activeTab === 'bookshelf' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'bookshelf'">Bookshelf</UIButton>
       <UIButton :variant="activeTab === 'milestones' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'milestones'">Milestones</UIButton>
     </div>
+
+    <p v-if="workspace.loading" class="rounded-md border border-border/60 bg-card/60 px-3 py-2 text-sm text-muted-foreground">
+      Loading your workspace...
+    </p>
+    <p v-if="workspace.hydrateError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      {{ workspace.hydrateError }}
+    </p>
+    <p v-if="workspace.actionError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      {{ workspace.actionError }}
+    </p>
+    <p v-if="workspace.searchError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      {{ workspace.searchError }}
+    </p>
+    <p v-if="workspace.annotationsError || pageError" class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      {{ workspace.annotationsError || pageError }}
+    </p>
 
     <div v-if="activeTab === 'videos'" class="grid gap-5 xl:grid-cols-[1.25fr,0.85fr]">
       <UICard class="border-border/60 bg-card/75">

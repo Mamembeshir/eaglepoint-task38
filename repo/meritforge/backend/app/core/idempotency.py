@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import logging
 
 from fastapi import Request
 from redis import asyncio as redis_async
@@ -9,6 +10,9 @@ from starlette.responses import JSONResponse, Response
 
 from app.core.config import settings
 from app.core.security import decode_token
+
+
+logger = logging.getLogger("meritforge.middleware")
 
 
 class IdempotencyMiddleware(BaseHTTPMiddleware):
@@ -50,6 +54,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         if not idempotency_key:
             return await call_next(request)
 
+        user_identifier = self._user_identifier(request)
+        key = f"idempotency:{user_identifier}:{idempotency_key}"
+
+        try:
+            cached = await self.redis.get(key)
+        except Exception:
+            logger.warning(
+                "idempotency_redis_read_unavailable_fail_open",
+                extra={"path": request.url.path, "user_identifier": user_identifier},
+            )
+            return await call_next(request)
+
         body = await request.body()
         body_sent = False
 
@@ -61,12 +77,8 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             return {"type": "http.request", "body": body, "more_body": False}
 
         request._receive = receive
-
-        user_identifier = self._user_identifier(request)
-        key = f"idempotency:{user_identifier}:{idempotency_key}"
         request_hash = self._request_hash(request, body)
 
-        cached = await self.redis.get(key)
         if cached:
             record = json.loads(cached)
             if record.get("request_hash") != request_hash:
@@ -95,7 +107,13 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             "headers": headers,
             "body_base64": base64.b64encode(response_body).decode("utf-8"),
         }
-        await self.redis.set(key, json.dumps(record), ex=self.ttl_seconds)
+        try:
+            await self.redis.set(key, json.dumps(record), ex=self.ttl_seconds)
+        except Exception:
+            logger.warning(
+                "idempotency_redis_write_unavailable_fail_open",
+                extra={"path": request.url.path, "user_identifier": user_identifier},
+            )
 
         return Response(
             content=response_body,

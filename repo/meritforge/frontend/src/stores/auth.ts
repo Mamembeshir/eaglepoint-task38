@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { api } from '@/lib/api'
+import { getProfileBackupKey } from '@/lib/profileBackup'
 import type { AppRole, AuthResponse, AuthUser, LoginPayload, RegisterPayload } from '@/types/auth'
 
 export const useAuthStore = defineStore('auth', () => {
@@ -38,10 +39,14 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
+    const currentUserId = user.value?.id ?? null
     loading.value = true
     try {
       await api.post('/api/v1/auth/logout')
     } finally {
+      if (currentUserId) {
+        localStorage.removeItem(getProfileBackupKey(currentUserId))
+      }
       user.value = null
       loading.value = false
     }
