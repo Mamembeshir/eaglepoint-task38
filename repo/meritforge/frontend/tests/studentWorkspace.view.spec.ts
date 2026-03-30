@@ -3,18 +3,25 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 
 const workspaceMock = vi.hoisted(() => ({
-  videos: [{ id: '11111111-1111-4111-8111-111111111111', title: 'Video A', topic: 'career', durationSeconds: 100, summary: 'A', streamUrl: '/a.mp4', poster: '', contentType: 'video' }],
-  currentVideo: { id: '11111111-1111-4111-8111-111111111111', title: 'Video A', topic: 'career', durationSeconds: 100, summary: 'A', streamUrl: '/a.mp4', poster: '', contentType: 'video' },
+  videos: [{ id: '11111111-1111-4111-8111-111111111111', title: 'Video A', topic: 'career', durationSeconds: 100, summary: 'A', streamUrl: '/a.mp4', poster: '', contentType: 'video', status: 'published', retractedAt: null, retractionNotice: null }],
+  videoItems: [{ id: '11111111-1111-4111-8111-111111111111', title: 'Video A', topic: 'career', durationSeconds: 100, summary: 'A', streamUrl: '/a.mp4', poster: '', contentType: 'video', status: 'published', retractedAt: null, retractionNotice: null }],
+  currentVideo: { id: '11111111-1111-4111-8111-111111111111', title: 'Video A', topic: 'career', durationSeconds: 100, summary: 'A', streamUrl: '/a.mp4', poster: '', contentType: 'video', status: 'published', retractedAt: null, retractionNotice: null },
   currentVideoId: '11111111-1111-4111-8111-111111111111',
   progressByVideo: { '11111111-1111-4111-8111-111111111111': 0 },
   annotationsByVideo: { '11111111-1111-4111-8111-111111111111': [] },
   milestones: [],
+  applications: [],
   cohorts: [{ id: 'c1', name: 'Alpha', slug: 'alpha' }],
   selectedVisibility: 'private',
   selectedCohortId: '',
   favoriteVideoIds: [],
   subscribedTopics: [],
   privateBookshelf: [],
+  loading: false,
+  hydrateError: '',
+  actionError: '',
+  searchError: '',
+  annotationsError: '',
   hydrateServerState: vi.fn(async () => undefined),
   loadAnnotations: vi.fn(async () => undefined),
   trackPlay: vi.fn(async () => undefined),
@@ -23,6 +30,8 @@ const workspaceMock = vi.hoisted(() => ({
   toggleBookmark: vi.fn(async () => undefined),
   toggleTopicSubscription: vi.fn(async () => undefined),
   addAnnotation: vi.fn(async () => undefined),
+  reportApplicationMilestone: vi.fn(async () => undefined),
+  searchCatalog: vi.fn(async () => []),
   selectVideo: vi.fn()
 }))
 

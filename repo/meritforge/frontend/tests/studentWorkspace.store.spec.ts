@@ -49,8 +49,9 @@ describe('student workspace store', () => {
       if (url === '/api/v1/content') {
         return {
           data: [
-            { id: videoId, title: 'Video A', content_type: 'video', media_url: '/a.mp4', metadata: { topic: 'career', duration_seconds: 120 }, summary: 'A' },
-            { id: otherVideoId, title: 'Video B', content_type: 'video', media_url: '/b.mp4', metadata: { topic: 'portfolio', duration_seconds: 90 }, summary: 'B' }
+            { id: videoId, title: 'Video A', content_type: 'video', media_url: '/a.mp4', metadata: { topic: 'career', duration_seconds: 120 }, summary: 'A', status: 'published' },
+            { id: otherVideoId, title: 'Article A', content_type: 'article', metadata: { topic: 'portfolio' }, summary: 'B', status: 'published' },
+            { id: '44444444-4444-4444-8444-444444444444', title: 'Job A', content_type: 'job_announcement', metadata: { topic: 'hiring' }, summary: 'C', status: 'published' }
           ]
         } as never
       }
@@ -63,11 +64,12 @@ describe('student workspace store', () => {
     const store = useStudentWorkspaceStore()
     await store.hydrateServerState()
 
-    expect(store.videos).toHaveLength(2)
+    expect(store.videos).toHaveLength(3)
     expect(store.currentVideoId).toBe(videoId)
     expect(store.progressByVideo[videoId]).toBe(48)
     expect(store.bookmarkedVideoIds).toEqual([videoId])
     expect(store.favoriteVideoIds).toEqual([videoId])
+    expect(store.videos.map((item) => item.contentType)).toEqual(['video', 'article', 'job_announcement'])
   })
 
   it('sends telemetry and bookmark/favorite API calls', async () => {
@@ -76,7 +78,7 @@ describe('student workspace store', () => {
       if (url === '/api/v1/users/me/export') return { data: { cohorts: [] } } as never
       if (url.includes('/api/v1/students/')) return { data: [] } as never
       if (url === '/api/v1/content') {
-        return { data: [{ id: videoId, title: 'Video A', content_type: 'video', media_url: '/a.mp4', metadata: { topic: 'career', duration_seconds: 120 }, summary: 'A' }] } as never
+        return { data: [{ id: videoId, title: 'Video A', content_type: 'video', media_url: '/a.mp4', metadata: { topic: 'career', duration_seconds: 120 }, summary: 'A', status: 'published' }] } as never
       }
       if (url === '/api/v1/bookmarks') return { data: [] } as never
       return { data: [] } as never

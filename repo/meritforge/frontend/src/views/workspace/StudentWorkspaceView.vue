@@ -3,8 +3,10 @@ import {
   BookHeart,
   Bookmark,
   CheckCircle2,
+  FileText,
   FastForward,
   Heart,
+  Newspaper,
   Play,
   Sparkles,
   StickyNote,
@@ -24,6 +26,7 @@ const workspace = useStudentWorkspaceStore()
 
 const playerEl = ref<HTMLVideoElement | null>(null)
 const activeTab = ref<'videos' | 'bookshelf' | 'milestones'>('videos')
+const contentFilter = ref<'all' | 'video' | 'article' | 'job_announcement'>('all')
 const annotationDraft = ref('')
 const annotationSaving = ref(false)
 const annotationError = ref('')
@@ -32,7 +35,7 @@ const selectedStartOffset = ref<number | null>(null)
 const selectedEndOffset = ref<number | null>(null)
 const selectedHighlightedText = ref('')
 const searchQuery = ref('')
-const searchResults = ref<Array<{ id: string; title: string; topic: string; durationSeconds: number }>>([])
+const searchResults = ref<Array<{ id: string; title: string; topic: string; durationSeconds: number; contentType: string }>>([])
 const searching = ref(false)
 const pageError = ref('')
 const videoLoadError = ref('')
@@ -49,9 +52,14 @@ let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 let lastTelemetryTick = 0
 
 const allTopics = computed(() => [...new Set(workspace.videos.map((video) => video.topic))])
+const filteredContent = computed(() => {
+  if (contentFilter.value === 'all') return workspace.videos
+  return workspace.videos.filter((item) => item.contentType === contentFilter.value)
+})
+const currentContent = computed(() => workspace.currentVideo)
 const currentProgress = computed(() => {
-  const current = workspace.currentVideo
-  if (!current) return 0
+  const current = currentContent.value
+  if (!current || current.contentType !== 'video') return 0
   return workspace.progressByVideo[current.id] ?? 0
 })
 
@@ -73,6 +81,7 @@ async function onVideoPlay() {
 
 async function onVideoTimeUpdate() {
   if (!playerEl.value || !workspace.currentVideo) return
+  if (workspace.currentVideo.contentType !== 'video') return
   const now = Date.now()
   if (now - lastTelemetryTick < 5000) return
   lastTelemetryTick = now
@@ -82,7 +91,7 @@ async function onVideoTimeUpdate() {
 async function skipVideo() {
   await workspace.skipCurrentVideo()
   const currentIndex = workspace.videos.findIndex((v) => v.id === workspace.currentVideoId)
-  const next = workspace.videos[(currentIndex + 1) % workspace.videos.length]
+  const next = workspace.videoItems[(workspace.videoItems.findIndex((v) => v.id === workspace.currentVideoId) + 1) % workspace.videoItems.length]
   if (next) {
     workspace.selectVideo(next.id)
   }
@@ -204,12 +213,13 @@ watch(
       }
       searching.value = true
       try {
-        const results = await workspace.searchContent(normalized, 'video', 20)
+        const results = await workspace.searchCatalog(normalized, undefined, 20)
         searchResults.value = results.map((item) => ({
           id: item.id,
           title: item.title,
           topic: item.topic,
-          durationSeconds: item.durationSeconds
+          durationSeconds: item.durationSeconds,
+          contentType: item.contentType
         }))
       } catch (error) {
         pageError.value = getApiErrorMessage(error)
@@ -263,12 +273,12 @@ onMounted(async () => {
       <p class="text-xs uppercase tracking-[0.16em] text-muted-foreground">Student Workspace</p>
       <h2 class="text-3xl font-semibold tracking-tight">Career Learning Studio</h2>
       <p class="max-w-3xl text-sm text-muted-foreground">
-        Browse short career videos, track milestones, save your private bookshelf, and continue exactly where you stopped across devices.
+        Browse published career videos, articles, and job announcements, then save the items you want to revisit.
       </p>
     </header>
 
     <div class="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-card/70 p-2">
-      <UIButton :variant="activeTab === 'videos' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'videos'">Videos</UIButton>
+      <UIButton :variant="activeTab === 'videos' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'videos'">Browse Content</UIButton>
       <UIButton :variant="activeTab === 'bookshelf' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'bookshelf'">Bookshelf</UIButton>
       <UIButton :variant="activeTab === 'milestones' ? 'default' : 'ghost'" size="sm" @click="activeTab = 'milestones'">Milestones</UIButton>
     </div>
@@ -294,30 +304,46 @@ onMounted(async () => {
         <UICardHeader>
           <div class="flex items-center justify-between gap-4">
             <div>
-              <UICardTitle class="text-2xl">{{ workspace.currentVideo?.title }}</UICardTitle>
-              <UICardDescription>{{ workspace.currentVideo?.summary }}</UICardDescription>
+              <UICardTitle class="text-2xl">{{ currentContent?.title }}</UICardTitle>
+              <UICardDescription>{{ currentContent?.summary }}</UICardDescription>
             </div>
-            <UIBadge variant="secondary" class="capitalize">{{ workspace.currentVideo?.topic }}</UIBadge>
+            <UIBadge variant="secondary" class="capitalize">{{ currentContent?.contentType?.replace('_', ' ') || currentContent?.topic }}</UIBadge>
           </div>
         </UICardHeader>
         <UICardContent class="space-y-4">
-          <div class="overflow-hidden rounded-xl border border-border/60 bg-black">
+          <div v-if="currentContent?.contentType === 'video'" class="overflow-hidden rounded-xl border border-border/60 bg-black">
             <video
               ref="playerEl"
               class="aspect-video w-full"
               controls
-              :poster="workspace.currentVideo?.poster"
+              :poster="currentContent?.poster"
               @play="onVideoPlay"
               @timeupdate="onVideoTimeUpdate"
               @loadeddata="onVideoLoaded"
               @error="onVideoError"
             >
-              <source :src="workspace.currentVideo?.streamUrl" type="video/mp4" />
+              <source :src="currentContent?.streamUrl" type="video/mp4" />
             </video>
           </div>
 
-          <div v-if="workspace.currentVideo?.status === 'retracted'" class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700">
-            {{ workspace.currentVideo.retractionNotice || 'This content has been retracted.' }}
+          <div v-else-if="currentContent?.contentType === 'article'" class="rounded-xl border border-border/60 bg-background/60 p-5">
+            <div class="mb-3 flex items-center gap-2 text-muted-foreground">
+              <FileText class="h-4 w-4" />
+              <span class="text-sm font-medium">Article</span>
+            </div>
+            <p class="text-sm leading-7 text-foreground/90">{{ currentContent.summary || 'No article summary is available yet.' }}</p>
+          </div>
+
+          <div v-else-if="currentContent?.contentType === 'job_announcement'" class="rounded-xl border border-border/60 bg-background/60 p-5">
+            <div class="mb-3 flex items-center gap-2 text-muted-foreground">
+              <Newspaper class="h-4 w-4" />
+              <span class="text-sm font-medium">Job announcement</span>
+            </div>
+            <p class="text-sm leading-7 text-foreground/90">{{ currentContent.summary || 'No job summary is available yet.' }}</p>
+          </div>
+
+          <div v-if="currentContent?.status === 'retracted'" class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700">
+            {{ currentContent.retractionNotice || 'This content has been retracted.' }}
           </div>
 
           <p v-if="videoLoading" class="text-xs text-muted-foreground">Loading video...</p>
@@ -326,8 +352,8 @@ onMounted(async () => {
             <div class="mt-2 flex flex-wrap items-center gap-2">
               <UIButton size="sm" variant="outline" @click="retryVideoLoad">Retry</UIButton>
               <a
-                v-if="workspace.currentVideo?.streamUrl"
-                :href="workspace.currentVideo.streamUrl"
+                v-if="currentContent?.streamUrl"
+                :href="currentContent.streamUrl"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="text-xs text-primary underline-offset-2 hover:underline"
@@ -337,7 +363,7 @@ onMounted(async () => {
             </div>
           </div>
 
-          <div class="grid gap-3 sm:grid-cols-2">
+          <div v-if="currentContent?.contentType === 'video'" class="grid gap-3 sm:grid-cols-2">
             <UIButton class="gap-2" @click="onVideoPlay">
               <Play class="h-4 w-4" />
               Track play
@@ -349,22 +375,22 @@ onMounted(async () => {
             <UIButton
               variant="outline"
               class="gap-2"
-              @click="workspace.currentVideo && workspace.toggleFavorite(workspace.currentVideo.id)"
+              @click="currentContent && workspace.toggleFavorite(currentContent.id)"
             >
-              <Heart class="h-4 w-4" :class="workspace.currentVideo && workspace.favoriteVideoIds.includes(workspace.currentVideo.id) ? 'fill-current text-rose-500' : ''" />
+              <Heart class="h-4 w-4" :class="currentContent && workspace.favoriteVideoIds.includes(currentContent.id) ? 'fill-current text-rose-500' : ''" />
               Favorite
             </UIButton>
             <UIButton
               variant="outline"
               class="gap-2"
-              @click="workspace.currentVideo && workspace.toggleBookmark(workspace.currentVideo.id)"
+              @click="currentContent && workspace.toggleBookmark(currentContent.id)"
             >
               <Bookmark class="h-4 w-4" />
               Bookmark
             </UIButton>
           </div>
 
-          <div class="rounded-xl border border-border/60 bg-background/60 p-4">
+          <div v-if="currentContent?.contentType === 'video'" class="rounded-xl border border-border/60 bg-background/60 p-4">
             <div class="mb-2 flex items-center justify-between text-sm">
               <span class="font-medium">Resume where you left off</span>
               <span class="text-muted-foreground">{{ currentProgress }}s</span>
@@ -372,7 +398,7 @@ onMounted(async () => {
             <div class="h-2 rounded-full bg-muted">
               <div
                 class="h-2 rounded-full bg-primary transition-all"
-                :style="{ width: `${workspace.currentVideo ? Math.min(100, (currentProgress / workspace.currentVideo.durationSeconds) * 100) : 0}%` }"
+                :style="{ width: `${currentContent ? Math.min(100, (currentProgress / currentContent.durationSeconds) * 100) : 0}%` }"
               />
             </div>
           </div>
@@ -382,13 +408,19 @@ onMounted(async () => {
       <div class="space-y-5">
         <UICard class="border-border/60 bg-card/75">
           <UICardHeader>
-            <UICardTitle class="flex items-center gap-2 text-lg"><Video class="h-5 w-5" /> Video Queue</UICardTitle>
-            <UICardDescription>Short-form career content personalized for your progress.</UICardDescription>
+            <UICardTitle class="flex items-center gap-2 text-lg"><Video class="h-5 w-5" /> Content Catalog</UICardTitle>
+            <UICardDescription>Browse published career content across video, article, and hiring updates.</UICardDescription>
           </UICardHeader>
           <UICardContent class="space-y-2">
             <div class="space-y-2 rounded-lg border border-border/60 bg-background/50 p-3">
-              <label class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Search Videos</label>
+              <label class="text-xs uppercase tracking-[0.12em] text-muted-foreground">Search Content</label>
               <UIInput v-model="searchQuery" placeholder="Search by title, summary, or metadata" />
+              <div class="flex flex-wrap gap-2">
+                <UIButton size="sm" :variant="contentFilter === 'all' ? 'default' : 'outline'" @click="contentFilter = 'all'">All</UIButton>
+                <UIButton size="sm" :variant="contentFilter === 'video' ? 'default' : 'outline'" @click="contentFilter = 'video'">Videos</UIButton>
+                <UIButton size="sm" :variant="contentFilter === 'article' ? 'default' : 'outline'" @click="contentFilter = 'article'">Articles</UIButton>
+                <UIButton size="sm" :variant="contentFilter === 'job_announcement' ? 'default' : 'outline'" @click="contentFilter = 'job_announcement'">Job announcements</UIButton>
+              </div>
               <p v-if="searching" class="text-xs text-muted-foreground">Searching...</p>
               <div v-else-if="searchQuery.trim()" class="space-y-2">
                 <button
@@ -398,26 +430,33 @@ onMounted(async () => {
                   @click="workspace.selectVideo(video.id)"
                 >
                   <p class="text-sm font-medium leading-5">{{ video.title }}</p>
-                  <p class="text-xs text-muted-foreground capitalize">{{ video.topic }} · {{ Math.ceil(video.durationSeconds / 60) }} min</p>
+                  <p class="text-xs text-muted-foreground capitalize">
+                    {{ video.contentType.replace('_', ' ') }}<span v-if="video.contentType === 'video'"> · {{ Math.ceil(video.durationSeconds / 60) }} min</span>
+                  </p>
                 </button>
                 <p v-if="!searchResults.length" class="text-xs text-muted-foreground">No results found.</p>
               </div>
             </div>
             <button
-              v-for="video in workspace.videos"
-              :key="video.id"
+              v-for="item in filteredContent"
+              :key="item.id"
               class="w-full rounded-lg border border-border/50 p-3 text-left transition hover:bg-accent/40"
-              :class="video.id === workspace.currentVideoId ? 'bg-primary/10 border-primary/40' : ''"
-              @click="workspace.selectVideo(video.id)"
+              :class="item.id === workspace.currentVideoId ? 'bg-primary/10 border-primary/40' : ''"
+              @click="workspace.selectVideo(item.id)"
             >
               <div class="flex items-start justify-between gap-2">
                 <div>
-                  <p class="text-sm font-medium leading-5">{{ video.title }}</p>
-                  <p class="text-xs text-muted-foreground">{{ Math.ceil(video.durationSeconds / 60) }} min</p>
+                  <p class="text-sm font-medium leading-5">{{ item.title }}</p>
+                  <p class="text-xs text-muted-foreground">
+                    {{ item.contentType.replace('_', ' ') }}
+                    <span v-if="item.contentType === 'video'"> · {{ Math.ceil(item.durationSeconds / 60) }} min</span>
+                  </p>
+                  <p v-if="item.summary" class="mt-1 line-clamp-2 text-xs text-muted-foreground">{{ item.summary }}</p>
                 </div>
-                <UIBadge variant="outline" class="capitalize">{{ video.topic }}</UIBadge>
+                <UIBadge variant="outline" class="capitalize">{{ item.topic }}</UIBadge>
               </div>
             </button>
+            <p v-if="!filteredContent.length" class="text-xs text-muted-foreground">No content matches this filter yet.</p>
           </UICardContent>
         </UICard>
 
@@ -527,8 +566,8 @@ onMounted(async () => {
             </UICard>
           </div>
           <div v-else class="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
-            No bookmarks yet. Favorite or bookmark videos from the stream to build your bookshelf.
-          </div>
+             No saved content yet. Bookmark items from the catalog to build your bookshelf.
+           </div>
         </UICardContent>
       </UICard>
     </div>

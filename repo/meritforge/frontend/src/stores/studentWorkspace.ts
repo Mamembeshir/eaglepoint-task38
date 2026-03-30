@@ -106,6 +106,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
 
   const currentVideo = computed(() => videos.value.find((v) => v.id === currentVideoId.value) ?? videos.value[0])
   const privateBookshelf = computed(() => videos.value.filter((v) => bookmarkedVideoIds.value.includes(v.id)))
+  const videoItems = computed(() => videos.value.filter((item) => item.contentType === 'video'))
 
   function mapContentToVideo(item: ContentItem): CareerVideo {
     const metadata = (item.metadata ?? {}) as Record<string, unknown>
@@ -169,7 +170,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
         api.get<Array<{ content_id: string; progress_seconds: number }>>('/api/v1/telemetry/progress'),
         api.get<{ cohorts: CohortOption[] }>('/api/v1/users/me/export'),
         api.get<Milestone[]>(`/api/v1/students/${auth.user.id}/milestones`),
-        api.get<ContentItem[]>('/api/v1/content', { params: { type: 'video' } }),
+        api.get<ContentItem[]>('/api/v1/content'),
         api.get<BookmarkItem[]>('/api/v1/bookmarks').catch(() => ({ data: [] })),
         api.get<TopicSubscriptionItem[]>('/api/v1/users/me/topic-subscriptions').catch(() => ({ data: [] })),
         api.get<StudentApplication[]>('/api/v1/student/applications').catch(() => ({ data: [] }))
@@ -194,7 +195,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
       applications.value = applicationsRes.data ?? []
 
       if (!videos.value.find((video) => video.id === currentVideoId.value)) {
-        currentVideoId.value = videos.value[0]?.id ?? ''
+        currentVideoId.value = videoItems.value[0]?.id ?? videos.value[0]?.id ?? ''
       }
     } catch (error) {
       hydrateError.value = getApiErrorMessage(error)
@@ -221,7 +222,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   }
 
   async function trackPlay(positionSeconds: number) {
-    if (!currentVideo.value) return
+    if (!currentVideo.value || currentVideo.value.contentType !== 'video') return
     progressByVideo.value[currentVideo.value.id] = positionSeconds
     await sendTelemetry('play', currentVideo.value.id, {
       position_seconds: positionSeconds,
@@ -231,7 +232,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   }
 
   async function skipCurrentVideo() {
-    if (!currentVideo.value) return
+    if (!currentVideo.value || currentVideo.value.contentType !== 'video') return
     await sendTelemetry('skip', currentVideo.value.id, {
       skipped_video_id: currentVideo.value.id,
       topic: currentVideo.value.topic,
@@ -325,6 +326,10 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   }
 
   async function searchContent(query: string, contentType: 'video' | 'article' | 'job_announcement' = 'video', limit = 20) {
+    return searchCatalog(query, contentType, limit)
+  }
+
+  async function searchCatalog(query: string, contentType?: 'video' | 'article' | 'job_announcement', limit = 20) {
     searchError.value = ''
     const normalizedQuery = query.trim()
     if (!normalizedQuery) return [] as CareerVideo[]
@@ -405,6 +410,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     videos,
     currentVideo,
     currentVideoId,
+    videoItems,
     favoriteVideoIds,
     bookmarkedVideoIds,
     subscribedTopics,
@@ -429,6 +435,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     toggleBookmark,
     toggleTopicSubscription,
     searchContent,
+    searchCatalog,
     addAnnotation,
     reportApplicationMilestone
   }
