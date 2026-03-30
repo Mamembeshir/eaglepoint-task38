@@ -73,3 +73,4 @@ class ContentCatalogItemOut(BaseModel):
     summary: str | None
     retracted_at: datetime | None = None
     retraction_notice: str | None = None
+    job_post_id: UUID | None = None

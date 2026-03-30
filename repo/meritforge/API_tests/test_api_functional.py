@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1 import api_router
 from app.core.config import settings
-from app.core.enums import AnnotationVisibility, ContentStatus, ContentType
+from app.core.enums import AnnotationVisibility, ApplicationStatus, ContentStatus, ContentType
 from app.core.database import get_db
 from app.dependencies.auth import get_current_user
 
@@ -856,6 +856,63 @@ class EmployerAuthorizationApiTests(unittest.TestCase):
         client = _build_client(fake_db, user_b)
 
         response = client.get(f"/api/v1/employer/job-posts/{job_post_id}/applications")
+
+        self.assertEqual(response.status_code, 403)
+
+
+class StudentJobApplicationApiTests(unittest.TestCase):
+    def test_student_can_submit_application_for_active_published_job(self):
+        job_post_id = uuid.uuid4()
+        student = _user("student")
+        fake_db = _FakeDB(
+            scalar_values=[
+                SimpleNamespace(id=job_post_id, content_id=uuid.uuid4(), is_active=True, created_by_id=uuid.uuid4()),
+                SimpleNamespace(id=uuid.uuid4(), status=ContentStatus.PUBLISHED),
+                None,
+                None,
+            ]
+        )
+        client = _build_client(fake_db, student)
+
+        response = client.post(
+            f"/api/v1/student/job-posts/{job_post_id}/applications",
+            json={"cover_letter": "I am excited to apply."},
+        )
+
+        self.assertEqual(response.status_code, 201)
+        payload = response.json()
+        self.assertEqual(payload["job_post_id"], str(job_post_id))
+        self.assertEqual(payload["applicant_id"], str(student.id))
+        self.assertEqual(payload["status"], ApplicationStatus.SUBMITTED.value)
+
+    def test_duplicate_active_application_returns_409(self):
+        job_post_id = uuid.uuid4()
+        student = _user("student")
+        fake_db = _FakeDB(
+            scalar_values=[
+                SimpleNamespace(id=job_post_id, content_id=uuid.uuid4(), is_active=True, created_by_id=uuid.uuid4()),
+                SimpleNamespace(id=uuid.uuid4(), status=ContentStatus.PUBLISHED),
+                SimpleNamespace(id=uuid.uuid4(), status=ApplicationStatus.SUBMITTED),
+            ]
+        )
+        client = _build_client(fake_db, student)
+
+        response = client.post(
+            f"/api/v1/student/job-posts/{job_post_id}/applications",
+            json={},
+        )
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_non_student_cannot_submit_student_application(self):
+        job_post_id = uuid.uuid4()
+        fake_db = _FakeDB()
+        client = _build_client(fake_db, _user("employer_manager"))
+
+        response = client.post(
+            f"/api/v1/student/job-posts/{job_post_id}/applications",
+            json={},
+        )
 
         self.assertEqual(response.status_code, 403)
 

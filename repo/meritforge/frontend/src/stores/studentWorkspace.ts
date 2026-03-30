@@ -20,6 +20,7 @@ interface CareerVideo {
   status: 'published' | 'retracted'
   retractedAt: string | null
   retractionNotice: string | null
+  jobPostId: string | null
 }
 
 interface ContentItem {
@@ -32,6 +33,7 @@ interface ContentItem {
   status: 'published' | 'retracted'
   retracted_at?: string | null
   retraction_notice?: string | null
+  job_post_id?: string | null
 }
 
 interface StudentApplication {
@@ -129,7 +131,8 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
       contentType: item.content_type,
       status: item.status,
       retractedAt: item.retracted_at ?? null,
-      retractionNotice: item.retraction_notice ?? null
+      retractionNotice: item.retraction_notice ?? null,
+      jobPostId: item.job_post_id ?? null
     }
   }
 
@@ -404,6 +407,37 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     }
   }
 
+  async function applyToJobPost(jobPostId: string, payload?: {
+    coverLetter?: string
+    resumeUrl?: string
+    portfolioUrl?: string
+  }) {
+    actionError.value = ''
+    try {
+      const { data } = await api.post<StudentApplication>(`/api/v1/student/job-posts/${jobPostId}/applications`, {
+        cover_letter: payload?.coverLetter,
+        resume_url: payload?.resumeUrl,
+        portfolio_url: payload?.portfolioUrl
+      })
+
+      const existing = applications.value.find((item) => item.id === data.id)
+      if (!existing) {
+        applications.value = [data, ...applications.value]
+      }
+
+      await sendTelemetry('job_application', currentVideo.value?.id, {
+        job_post_id: jobPostId,
+        application_id: data.id,
+        status: data.status
+      })
+      return data
+    } catch (error) {
+      actionError.value = getApiErrorMessage(error)
+      logDevError(error)
+      throw error
+    }
+  }
+
   return {
     loading,
     contents,
@@ -437,6 +471,7 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
     searchContent,
     searchCatalog,
     addAnnotation,
-    reportApplicationMilestone
+    reportApplicationMilestone,
+    applyToJobPost
   }
 })

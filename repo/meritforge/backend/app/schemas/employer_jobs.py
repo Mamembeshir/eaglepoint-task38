@@ -67,6 +67,13 @@ class ApplicationStatusUpdateRequest(BaseModel):
     notes: str | None = None
 
 
+class StudentApplicationCreateRequest(BaseModel):
+    cover_letter: str | None = None
+    resume_url: str | None = Field(default=None, max_length=500)
+    portfolio_url: str | None = Field(default=None, max_length=500)
+    custom_fields: dict | None = None
+
+
 class JobMilestoneTemplateCreateRequest(BaseModel):
     key: str = Field(min_length=2, max_length=100)
     name: str = Field(min_length=2, max_length=255)

@@ -19,6 +19,7 @@ from app.models.student_progress_milestone import StudentProgressMilestone
 from app.models.user import User
 from app.schemas.employer_jobs import (
     ApplicationOut,
+    StudentApplicationCreateRequest,
     ApplicationStatusUpdateRequest,
     JobMilestoneOut,
     JobMilestoneTemplateCreateRequest,
@@ -45,6 +46,11 @@ def _is_employer_or_admin(user: User) -> bool:
 def _ensure_employer_or_admin(user: User) -> None:
     if not _is_employer_or_admin(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Employer manager or admin role required")
+
+
+def _ensure_student(user: User) -> None:
+    if _role_name(user) != RoleType.STUDENT.value:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Student role required")
 
 
 def _slugify(title: str, db: Session) -> str:
@@ -315,6 +321,102 @@ def update_application_status(
         before_data=before,
         after_data={"status": payload.status.value, "notes": payload.notes},
         description="Updated application status",
+    )
+    db.commit()
+
+    return ApplicationOut(
+        id=application.id,
+        job_post_id=application.job_post_id,
+        applicant_id=application.applicant_id,
+        status=application.status,
+        submitted_at=application.submitted_at,
+        reviewed_at=application.reviewed_at,
+        created_at=application.created_at,
+    )
+
+
+@router.post("/student/job-posts/{job_post_id}/applications", response_model=ApplicationOut, status_code=status.HTTP_201_CREATED)
+def create_student_application(
+    job_post_id: UUID,
+    payload: StudentApplicationCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ApplicationOut:
+    _ensure_student(current_user)
+
+    job_post = db.scalar(select(JobPost).where(JobPost.id == job_post_id))
+    if not job_post:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job post not found")
+    if not job_post.is_active:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job post is not active")
+
+    content = db.scalar(select(Content).where(Content.id == job_post.content_id))
+    if not content or content.status != ContentStatus.PUBLISHED:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job post is not open for applications")
+
+    existing = db.scalar(
+        select(Application).where(
+            Application.job_post_id == job_post_id,
+            Application.applicant_id == current_user.id,
+            Application.status != ApplicationStatus.WITHDRAWN,
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Active application already exists for this job post")
+
+    application = db.scalar(
+        select(Application).where(
+            Application.job_post_id == job_post_id,
+            Application.applicant_id == current_user.id,
+        )
+    )
+    if application:
+        application.status = ApplicationStatus.SUBMITTED
+        application.cover_letter = payload.cover_letter
+        application.resume_url = payload.resume_url
+        application.portfolio_url = payload.portfolio_url
+        application.custom_fields = payload.custom_fields
+        application.submitted_at = datetime.now(timezone.utc)
+        application.notes = None
+    else:
+        application = Application(
+            job_post_id=job_post_id,
+            applicant_id=current_user.id,
+            status=ApplicationStatus.SUBMITTED,
+            cover_letter=payload.cover_letter,
+            resume_url=payload.resume_url,
+            portfolio_url=payload.portfolio_url,
+            custom_fields=payload.custom_fields,
+            submitted_at=datetime.now(timezone.utc),
+        )
+        db.add(application)
+        db.flush()
+
+    if job_post.created_by_id:
+        _notify(
+            user_id=job_post.created_by_id,
+            category="application_submitted",
+            title="New application submitted",
+            body=f"A student applied to job post {job_post.id}.",
+            entity_type="application",
+            entity_id=str(application.id),
+            db=db,
+        )
+
+    write_audit_log(
+        db,
+        action=AuditAction.CREATE,
+        entity_type="application",
+        entity_id=str(application.id),
+        actor=current_user,
+        request=request,
+        after_data={
+            "job_post_id": str(job_post_id),
+            "status": application.status.value,
+            "submitted_at": application.submitted_at.isoformat() if application.submitted_at else None,
+        },
+        description="Student submitted job application",
     )
     db.commit()
 

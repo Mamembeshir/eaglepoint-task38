@@ -145,4 +145,52 @@ describe('student workspace store', () => {
     expect(store.loading).toBe(false)
     expect(store.hydrateError).toBe('Cannot load workspace right now.')
   })
+
+  it('submits student job application and tracks telemetry', async () => {
+    vi.mocked(api.post)
+      .mockResolvedValueOnce({
+        data: {
+          id: '55555555-5555-4555-8555-555555555555',
+          job_post_id: '66666666-6666-4666-8666-666666666666',
+          status: 'submitted',
+          created_at: new Date().toISOString()
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never)
+
+    const store = useStudentWorkspaceStore()
+    store.currentVideoId = videoId
+    store.videos = [
+      {
+        id: videoId,
+        title: 'Video A',
+        topic: 'career',
+        durationSeconds: 120,
+        summary: 'A',
+        streamUrl: '/a.mp4',
+        poster: '',
+        contentType: 'video',
+        status: 'published',
+        retractedAt: null,
+        retractionNotice: null,
+        jobPostId: null
+      }
+    ]
+
+    const result = await store.applyToJobPost('66666666-6666-4666-8666-666666666666', {
+      coverLetter: 'I can contribute quickly.'
+    })
+
+    expect(result.status).toBe('submitted')
+    expect(vi.mocked(api.post)).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/student/job-posts/66666666-6666-4666-8666-666666666666/applications',
+      { cover_letter: 'I can contribute quickly.', resume_url: undefined, portfolio_url: undefined }
+    )
+    expect(vi.mocked(api.post)).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/telemetry/events',
+      expect.objectContaining({ event_type: 'job_application' })
+    )
+  })
 })

@@ -160,10 +160,10 @@ Security controls note:
 
 Operations / middleware resilience:
 
-- Rate limiting and idempotency middleware currently run in fail-open mode when Redis is unavailable (requests continue and a warning is logged).
+- Rate limiting and idempotency middleware run in fail-open mode by default when Redis is unavailable (requests continue and a warning is logged).
 - During Redis outages, abuse protection can degrade and duplicate writes can slip through despite `Idempotency-Key` usage.
 - Monitor Redis health and alert on middleware warnings like `rate_limit_redis_unavailable_fail_open` and `idempotency_redis_*_unavailable_fail_open`.
-- If your deployment requires stricter posture, plan a future fail-closed toggle (for example, env-driven `*_FAIL_CLOSED`) so write traffic can be blocked or degraded explicitly during Redis failure windows.
+- For stricter deployments, set `RATE_LIMIT_FAIL_CLOSED=true` and/or `IDEMPOTENCY_FAIL_CLOSED=true` to reject requests when Redis is unavailable.
 
 On-prem / integration (HMAC):
 
@@ -231,6 +231,7 @@ For local verbose error output, set `DEBUG=true` explicitly in `.env` (default c
 Set `VITE_API_URL` to empty for Docker/nginx same-origin (`/api/v1/...` paths). For standalone local Vite dev without nginx, set `VITE_API_URL=http://localhost:8000`.
 `REFRESH_TOKEN_HASH_ROTATION_DAYS` is an operational policy window; rotate `REFRESH_TOKEN_HASH_ACTIVE_KEY_ID` and keep prior keys in `REFRESH_TOKEN_HASH_KEYS` manually on that cadence.
 Set `ALLOW_REGISTRATION=false` to disable self-registration (`POST /api/v1/auth/register` returns `403`).
+Set `RATE_LIMIT_FAIL_CLOSED=true` and/or `IDEMPOTENCY_FAIL_CLOSED=true` if you need strict failure behavior when Redis is unavailable.
 
 ### Running Services
 

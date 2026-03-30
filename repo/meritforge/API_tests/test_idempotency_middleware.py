@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.idempotency import IdempotencyMiddleware
 
 
@@ -82,6 +83,33 @@ class IdempotencyMiddlewareApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+
+    def test_redis_failure_fails_closed_when_enabled(self):
+        self.redis_patch.stop()
+        self.redis_patch = patch("app.core.idempotency.redis_async.from_url", return_value=_FailingAsyncRedis())
+        self.redis_patch.start()
+
+        original = settings.idempotency_fail_closed
+        settings.idempotency_fail_closed = True
+        try:
+            app = FastAPI()
+            app.add_middleware(IdempotencyMiddleware, redis_url="redis://ignored")
+
+            @app.post("/idempotency/echo-fail-closed")
+            def echo(payload: dict) -> dict:
+                return {"ok": True, "echo": payload}
+
+            client = TestClient(app)
+            response = client.post(
+                "/idempotency/echo-fail-closed",
+                json={"value": 1},
+                headers={"Idempotency-Key": f"idem-{uuid.uuid4()}"},
+            )
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json().get("mode"), "fail_closed")
+        finally:
+            settings.idempotency_fail_closed = original
 
 
 if __name__ == "__main__":

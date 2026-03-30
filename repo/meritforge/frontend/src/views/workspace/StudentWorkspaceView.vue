@@ -48,6 +48,11 @@ const milestoneForm = reactive({
   targetValue: '1',
   description: ''
 })
+const applyForm = reactive({
+  coverLetter: ''
+})
+const applyLoading = ref(false)
+const applyMessage = ref('')
 let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
 let lastTelemetryTick = 0
 
@@ -135,6 +140,28 @@ async function submitMilestoneUpdate() {
   } catch (error) {
     pageError.value = getApiErrorMessage(error)
     logDevError(error)
+  }
+}
+
+async function applyToSelectedJob() {
+  if (!currentContent.value?.jobPostId) {
+    applyMessage.value = 'This job announcement cannot accept applications from this view yet.'
+    return
+  }
+
+  applyLoading.value = true
+  applyMessage.value = ''
+  try {
+    const application = await workspace.applyToJobPost(currentContent.value.jobPostId, {
+      coverLetter: applyForm.coverLetter || undefined
+    })
+    applyMessage.value = `Application submitted (${application.id.slice(0, 8)}...).`
+    applyForm.coverLetter = ''
+  } catch (error) {
+    applyMessage.value = getApiErrorMessage(error)
+    logDevError(error)
+  } finally {
+    applyLoading.value = false
   }
 }
 
@@ -235,6 +262,7 @@ watch(
   () => workspace.currentVideoId,
   async (videoId) => {
     pageError.value = ''
+    applyMessage.value = ''
     onVideoSourceChange()
     try {
       await workspace.loadAnnotations(videoId)
@@ -340,6 +368,13 @@ onMounted(async () => {
               <span class="text-sm font-medium">Job announcement</span>
             </div>
             <p class="text-sm leading-7 text-foreground/90">{{ currentContent.summary || 'No job summary is available yet.' }}</p>
+            <div class="mt-3 space-y-2">
+              <UITextarea v-model="applyForm.coverLetter" :rows="3" placeholder="Optional short cover letter" />
+              <UIButton :disabled="applyLoading || !currentContent?.jobPostId" @click="applyToSelectedJob">
+                {{ applyLoading ? 'Submitting...' : 'Apply to this job' }}
+              </UIButton>
+              <p v-if="applyMessage" class="text-xs text-muted-foreground">{{ applyMessage }}</p>
+            </div>
           </div>
 
           <div v-if="currentContent?.status === 'retracted'" class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700">

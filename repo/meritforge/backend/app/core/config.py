@@ -46,6 +46,8 @@ class Settings:
     step_up_expire_minutes: int = int(os.getenv("STEP_UP_EXPIRE_MINUTES", "5"))
     redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
     user_rate_limit_per_minute: int = int(os.getenv("USER_RATE_LIMIT_PER_MINUTE", "120"))
+    rate_limit_fail_closed: bool = _parse_bool(os.getenv("RATE_LIMIT_FAIL_CLOSED"), False)
+    idempotency_fail_closed: bool = _parse_bool(os.getenv("IDEMPOTENCY_FAIL_CLOSED"), False)
     integration_hmac_keys: dict[str, str] = _parse_key_map(os.getenv("INTEGRATION_HMAC_KEYS"))
     integration_hmac_timestamp_header: str = os.getenv("INTEGRATION_HMAC_TIMESTAMP_HEADER", "X-MeritForge-Timestamp")
     integration_hmac_signature_header: str = os.getenv("INTEGRATION_HMAC_SIGNATURE_HEADER", "X-MeritForge-Signature")

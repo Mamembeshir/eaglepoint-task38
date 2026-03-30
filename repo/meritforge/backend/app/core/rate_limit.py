@@ -52,5 +52,13 @@ class UserRateLimitMiddleware(BaseHTTPMiddleware):
                 "rate_limit_redis_unavailable_fail_open",
                 extra={"path": request.url.path, "identifier": identifier},
             )
+            if settings.rate_limit_fail_closed:
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": "Rate limit service unavailable",
+                        "mode": "fail_closed",
+                    },
+                )
 
         return await call_next(request)

@@ -102,6 +102,7 @@ def list_content_catalog(
                 summary=summary,
                 retracted_at=row.retracted_at,
                 retraction_notice="This content has been retracted." if row.retracted_at else None,
+                job_post_id=getattr(getattr(row, "job_post", None), "id", None),
             )
         )
 

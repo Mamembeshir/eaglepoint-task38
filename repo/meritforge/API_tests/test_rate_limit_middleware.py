@@ -66,6 +66,28 @@ class RateLimitMiddlewareApiTests(unittest.TestCase):
         client = TestClient(app)
         self.assertEqual(client.get("/rate-limit/ping-fail-open").status_code, 200)
 
+    def test_redis_failure_fails_closed_when_enabled(self):
+        self.redis_patch.stop()
+        self.redis_patch = patch("app.core.rate_limit.redis_async.from_url", return_value=_FailingRateRedis())
+        self.redis_patch.start()
+
+        original = settings.rate_limit_fail_closed
+        settings.rate_limit_fail_closed = True
+        try:
+            app = FastAPI()
+            app.add_middleware(UserRateLimitMiddleware, redis_url="redis://ignored", limit_per_minute=2)
+
+            @app.get("/rate-limit/ping-fail-closed")
+            def ping() -> dict:
+                return {"ok": True}
+
+            client = TestClient(app)
+            response = client.get("/rate-limit/ping-fail-closed")
+            self.assertEqual(response.status_code, 429)
+            self.assertEqual(response.json().get("mode"), "fail_closed")
+        finally:
+            settings.rate_limit_fail_closed = original
+
     def test_uses_configured_default_limit_value(self):
         original_limit = settings.user_rate_limit_per_minute
         settings.user_rate_limit_per_minute = 3

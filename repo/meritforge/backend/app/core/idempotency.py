@@ -64,6 +64,14 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 "idempotency_redis_read_unavailable_fail_open",
                 extra={"path": request.url.path, "user_identifier": user_identifier},
             )
+            if settings.idempotency_fail_closed:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "Idempotency service unavailable",
+                        "mode": "fail_closed",
+                    },
+                )
             return await call_next(request)
 
         body = await request.body()
@@ -114,6 +122,14 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 "idempotency_redis_write_unavailable_fail_open",
                 extra={"path": request.url.path, "user_identifier": user_identifier},
             )
+            if settings.idempotency_fail_closed:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "Idempotency service unavailable",
+                        "mode": "fail_closed",
+                    },
+                )
 
         return Response(
             content=response_body,
