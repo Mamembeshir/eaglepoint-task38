@@ -2,6 +2,8 @@
 
 Minimal runbook for local development and testing.
 
+Operational note: Redis-dependent middlewares default to fail-open; production should enable fail-closed via env vars (see repo/docker-compose.yml).
+
 ## Run (Docker)
 
 From `repo`:
