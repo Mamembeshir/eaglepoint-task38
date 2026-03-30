@@ -4,6 +4,7 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.core.rate_limit import UserRateLimitMiddleware
 
 
@@ -64,6 +65,29 @@ class RateLimitMiddlewareApiTests(unittest.TestCase):
 
         client = TestClient(app)
         self.assertEqual(client.get("/rate-limit/ping-fail-open").status_code, 200)
+
+    def test_uses_configured_default_limit_value(self):
+        original_limit = settings.user_rate_limit_per_minute
+        settings.user_rate_limit_per_minute = 3
+        try:
+            app = FastAPI()
+            app.add_middleware(
+                UserRateLimitMiddleware,
+                redis_url="redis://ignored",
+                limit_per_minute=settings.user_rate_limit_per_minute,
+            )
+
+            @app.get("/rate-limit/ping-config")
+            def ping() -> dict:
+                return {"ok": True}
+
+            client = TestClient(app)
+            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 200)
+            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 200)
+            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 200)
+            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 429)
+        finally:
+            settings.user_rate_limit_per_minute = original_limit
 
 
 if __name__ == "__main__":

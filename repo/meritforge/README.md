@@ -158,6 +158,13 @@ Security controls note:
 - Annotations support `private`, `cohort`, and `public` visibility. `public` annotations are visible to all authenticated users and should only be used for intentionally shared notes.
 - These controls protect secrets in the application database layer; they are not filesystem/disk encryption at the OS level.
 
+Operations / middleware resilience:
+
+- Rate limiting and idempotency middleware currently run in fail-open mode when Redis is unavailable (requests continue and a warning is logged).
+- During Redis outages, abuse protection can degrade and duplicate writes can slip through despite `Idempotency-Key` usage.
+- Monitor Redis health and alert on middleware warnings like `rate_limit_redis_unavailable_fail_open` and `idempotency_redis_*_unavailable_fail_open`.
+- If your deployment requires stricter posture, plan a future fail-closed toggle (for example, env-driven `*_FAIL_CLOSED`) so write traffic can be blocked or degraded explicitly during Redis failure windows.
+
 On-prem / integration (HMAC):
 
 - Integration requests require `X-MeritForge-Key-Id`, `X-MeritForge-Timestamp`, and `X-MeritForge-Signature` headers.
@@ -168,6 +175,8 @@ On-prem / integration (HMAC):
 Idempotency caveat:
 
 - Without an access cookie, idempotency keys are scoped by client IP (`ip:<address>`), so users behind shared NAT/proxy can collide on the same `Idempotency-Key`.
+- Prefer authenticated requests for mutating endpoints and always send a unique `Idempotency-Key` per logical operation.
+- If you rely on client IP identity, only trust forwarded IP headers behind controlled reverse proxies and explicit trust boundaries.
 
 ## Local HTTPS Setup (Optional Override)
 
@@ -229,6 +238,21 @@ Set `ALLOW_REGISTRATION=false` to disable self-registration (`POST /api/v1/auth/
 # Start all services
 docker compose up
 ```
+
+### Optional: run backend without Docker
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+export PYTHONPATH=backend
+export DATABASE_URL=postgresql://meritforge:meritforge@localhost:5432/meritforge
+export REDIS_URL=redis://localhost:6379/0
+alembic -c backend/alembic.ini upgrade head
+uvicorn app.main:app --app-dir backend --reload
+```
+
+Use this only when local Postgres/Redis are already running and configured.
 
 ### Database Migrations
 

@@ -16,6 +16,7 @@ from app.models.risk_dictionary import RiskDictionary
 from app.models.risk_grade_rule import RiskGradeRule
 from app.models.risk_severity_weight import RiskSeverityWeight
 from app.models.review_workflow_template_stage import ReviewWorkflowTemplateStage
+from app.models.review_workflow_stage import ReviewWorkflowStage
 from app.models.role import Role
 from app.models.user import User
 
@@ -32,9 +33,11 @@ class DbBackedWorkflowIntegrationTests(unittest.TestCase):
         cls._ensure_risk_config()
         cls.author = cls._ensure_user(RoleType.CONTENT_AUTHOR, f"author.{cls.seed_tag}@example.com")
         cls.reviewer = cls._ensure_user(RoleType.REVIEWER, f"reviewer.{cls.seed_tag}@example.com")
+        cls.reviewer_two = cls._ensure_user(RoleType.REVIEWER, f"reviewer2.{cls.seed_tag}@example.com")
         cls.student = cls._ensure_user(RoleType.STUDENT, f"student.{cls.seed_tag}@example.com")
         cls.author_ctx = cls._as_current_user(cls.author, RoleType.CONTENT_AUTHOR)
         cls.reviewer_ctx = cls._as_current_user(cls.reviewer, RoleType.REVIEWER)
+        cls.reviewer_two_ctx = cls._as_current_user(cls.reviewer_two, RoleType.REVIEWER)
         cls.student_ctx = cls._as_current_user(cls.student, RoleType.STUDENT)
 
     @classmethod
@@ -173,6 +176,53 @@ class DbBackedWorkflowIntegrationTests(unittest.TestCase):
             json={"event_type": "play", "content_id": content_id, "event_data": {"position_seconds": 12}},
         )
         self.assertEqual(telemetry.status_code, 201)
+
+    def test_medium_risk_stage_requires_two_distinct_approvers(self):
+        self.__class__.current_user = self.author_ctx
+        submission = self.client.post(
+            "/api/v1/content/submissions",
+            json={
+                "content_type": "article",
+                "title": f"Medium Risk Distinct Approvers {self.seed_tag}",
+                "body": "This body includes forbidden exactly once to reach medium risk.",
+            },
+        )
+        self.assertEqual(submission.status_code, 201)
+        content_id = submission.json()["content_id"]
+
+        db = SessionLocal()
+        try:
+            stage = db.scalar(
+                select(ReviewWorkflowStage)
+                .where(ReviewWorkflowStage.content_id == content_id)
+                .order_by(ReviewWorkflowStage.stage_order.asc())
+            )
+            self.assertIsNotNone(stage)
+            stage_id = stage.id
+        finally:
+            db.close()
+
+        self.__class__.current_user = self.reviewer_ctx
+        first = self.client.post(
+            f"/api/v1/review-workflow/stages/{stage_id}/decisions",
+            json={"decision": "approve", "comments": "First reviewer approval for medium risk stage."},
+        )
+        self.assertEqual(first.status_code, 200)
+        first_payload = first.json()
+        self.assertEqual(first_payload["required_distinct_reviewers"], 2)
+        self.assertEqual(first_payload["distinct_approvers"], 1)
+        self.assertFalse(first_payload["stage_completed"])
+
+        self.__class__.current_user = self.reviewer_two_ctx
+        second = self.client.post(
+            f"/api/v1/review-workflow/stages/{stage_id}/decisions",
+            json={"decision": "approve", "comments": "Second reviewer approval for medium risk stage."},
+        )
+        self.assertEqual(second.status_code, 200)
+        second_payload = second.json()
+        self.assertEqual(second_payload["required_distinct_reviewers"], 2)
+        self.assertEqual(second_payload["distinct_approvers"], 2)
+        self.assertTrue(second_payload["stage_completed"])
 
 
 if __name__ == "__main__":
