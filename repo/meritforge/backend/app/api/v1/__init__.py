@@ -5,7 +5,9 @@ from app.api.v1.admin import router as admin_router
 from app.api.v1.audit_logs import router as audit_logs_router
 from app.api.v1.bookmarks import router as bookmarks_router
 from app.api.v1.content_submission import router as content_submission_router
-from app.api.v1.engagement import router as engagement_router
+from app.api.v1.engagement_annotations import router as engagement_annotations_router
+from app.api.v1.engagement_milestones import router as engagement_milestones_router
+from app.api.v1.engagement_telemetry import router as engagement_telemetry_router
 from app.api.v1.employer_jobs import router as employer_jobs_router
 from app.api.v1.integration import router as integration_router
 from app.api.v1.operations import router as operations_router
@@ -24,7 +26,9 @@ api_router.include_router(user_management_router)
 api_router.include_router(content_submission_router)
 api_router.include_router(review_workflow_router)
 api_router.include_router(publishing_router)
-api_router.include_router(engagement_router)
+api_router.include_router(engagement_telemetry_router)
+api_router.include_router(engagement_milestones_router)
+api_router.include_router(engagement_annotations_router)
 api_router.include_router(integration_router)
 api_router.include_router(topic_subscriptions_router)
 api_router.include_router(employer_jobs_router)

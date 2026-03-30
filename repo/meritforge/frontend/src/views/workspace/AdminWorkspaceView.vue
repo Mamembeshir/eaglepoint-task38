@@ -1,390 +1,75 @@
 <script setup lang="ts">
 import { Activity, AlertOctagon, CalendarClock, Link2, RotateCcw, Users } from 'lucide-vue-next'
-import { onMounted, reactive, ref } from 'vue'
 
 import { UIBadge } from '@/components/ui/badge'
 import { UIButton } from '@/components/ui/button'
 import { UICard, UICardContent, UICardDescription, UICardHeader, UICardTitle } from '@/components/ui/card'
 import { UIInput } from '@/components/ui/input'
 import { UITextarea } from '@/components/ui/textarea'
-import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
-import { confirmStepUp } from '@/lib/stepUp'
-import { useAdminWorkspaceStore } from '@/stores/adminWorkspace'
 import StepUpConfirmationModal from '@/components/app/StepUpConfirmationModal.vue'
+import { useAdminWorkspaceView } from '@/composables/workspace/useAdminWorkspaceView'
 
-const store = useAdminWorkspaceStore()
-
-const activeTab = ref<'risk' | 'cohorts' | 'publishing' | 'audit' | 'webhooks'>('risk')
-const message = ref('')
-
-const riskForm = reactive({
-  term: '',
-  category: '',
-  severity: 'medium',
-  description: '',
-  replacement_suggestion: '',
-  is_regex: false
-})
-
-const editingRiskId = ref<string | null>(null)
-const riskEditForm = reactive({
-  term: '',
-  category: '',
-  severity: '',
-  description: '',
-  replacement_suggestion: '',
-  is_regex: false,
-  is_active: true
-})
-
-const webhookForm = reactive({
-  name: '',
-  url: '',
-  secret: '',
-  events: 'content.published,application.submitted',
-  retry_count: '3',
-  retry_delay_seconds: '60',
-  timeout_seconds: '30'
-})
-
-const webhookStatusFilter = ref('')
-
-const publishForm = reactive({
-  contentId: '',
-  publishAt: '',
-  unpublishAt: '',
-  canaryEnabled: true,
-  percentage: '5',
-  durationMinutes: '120'
-})
-
-const workflowStageForm = reactive({
-  stage_name: 'Initial review',
-  stage_order: '1',
-  description: 'Default required review stage',
-  is_required: true,
-  is_parallel: false
-})
-
-const workflowInitForm = reactive({
-  contentId: ''
-})
-const workflowMessage = ref('')
-const publishingLookupForm = reactive({
-  historyContentId: '',
-  visibilityContentId: '',
-  visibilityUserId: ''
-})
-
-const auditFilters = reactive({
-  user_email: '',
-  action: '',
-  start_at: '',
-  end_at: ''
-})
-const expandedAuditId = ref<string | null>(null)
-
-const membershipForm = reactive({
-  cohortId: '',
-  userId: ''
-})
-
-const cohortForm = reactive({
-  name: '',
-  slug: '',
-  description: ''
-})
-
-const takedownForm = reactive({
-  contentId: '',
-  reason: ''
-})
-
-const stepUpOpen = ref(false)
-const stepUpLoading = ref(false)
-const stepUpError = ref('')
-let stepUpAction: (() => Promise<void>) | null = null
-
-function openStepUp(action: () => Promise<void>) {
-  stepUpError.value = ''
-  stepUpAction = action
-  stepUpOpen.value = true
-}
-
-function cancelStepUp() {
-  stepUpOpen.value = false
-  stepUpError.value = ''
-  stepUpAction = null
-}
-
-async function onStepUpConfirm(password: string) {
-  stepUpLoading.value = true
-  stepUpError.value = ''
-  try {
-    await confirmStepUp(password)
-    if (stepUpAction) {
-      await stepUpAction()
-    }
-    cancelStepUp()
-  } catch (error) {
-    stepUpError.value = getApiErrorMessage(error)
-    logDevError(error)
-  } finally {
-    stepUpLoading.value = false
-  }
-}
-
-function toIsoDateTime(localDateTime: string) {
-  if (!localDateTime) return undefined
-  const date = new Date(localDateTime)
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
-}
-
-function prettyJson(value: unknown) {
-  if (value === null || value === undefined) return '-'
-  if (typeof value === 'string') return value
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
-}
-
-async function createRisk() {
-  await store.createRiskTerm({
-    term: riskForm.term,
-    category: riskForm.category,
-    severity: riskForm.severity,
-    description: riskForm.description || undefined,
-    replacement_suggestion: riskForm.replacement_suggestion || undefined,
-    is_regex: riskForm.is_regex
-  })
-  riskForm.term = ''
-  riskForm.category = ''
-  riskForm.description = ''
-  riskForm.replacement_suggestion = ''
-  riskForm.severity = 'medium'
-  riskForm.is_regex = false
-  message.value = 'Risk term created.'
-}
-
-function startRiskEdit(termId: string) {
-  const term = store.riskTerms.find((item) => item.id === termId)
-  if (!term) return
-  editingRiskId.value = termId
-  riskEditForm.category = term.category
-  riskEditForm.term = term.term
-  riskEditForm.severity = term.severity
-  riskEditForm.description = term.description || ''
-  riskEditForm.replacement_suggestion = term.replacement_suggestion || ''
-  riskEditForm.is_regex = term.is_regex
-  riskEditForm.is_active = term.is_active
-}
-
-function cancelRiskEdit() {
-  editingRiskId.value = null
-}
-
-async function saveRiskEdit(termId: string) {
-  await store.updateRiskTerm(termId, {
-    term: riskEditForm.term,
-    category: riskEditForm.category,
-    severity: riskEditForm.severity,
-    description: riskEditForm.description || undefined,
-    replacement_suggestion: riskEditForm.replacement_suggestion || undefined,
-    is_regex: riskEditForm.is_regex,
-    is_active: riskEditForm.is_active
-  })
-  editingRiskId.value = null
-  message.value = 'Risk term updated.'
-}
-
-async function deleteRisk(termId: string) {
-  const accepted = window.confirm('Delete this risk term? This cannot be undone.')
-  if (!accepted) return
-  await store.deleteRiskTerm(termId)
-  message.value = 'Risk term deleted.'
-}
-
-async function createWebhook() {
-  await store.createWebhook({
-    name: webhookForm.name,
-    url: webhookForm.url,
-    secret: webhookForm.secret || undefined,
-    events: webhookForm.events.split(',').map((x) => x.trim()).filter(Boolean),
-    retry_count: Number(webhookForm.retry_count),
-    retry_delay_seconds: Number(webhookForm.retry_delay_seconds),
-    timeout_seconds: Number(webhookForm.timeout_seconds)
-  })
-  webhookForm.name = ''
-  webhookForm.url = ''
-  webhookForm.secret = ''
-  message.value = 'Webhook created.'
-}
-
-async function refreshWebhookLogs() {
-  await store.loadWebhookDeliveries(webhookStatusFilter.value || undefined)
-}
-
-async function retryDelivery(deliveryId: string) {
-  await store.retryWebhookDelivery(deliveryId)
-  message.value = 'Retry queued for selected delivery.'
-}
-
-async function schedulePublishing() {
-  const publishAtIso = toIsoDateTime(publishForm.publishAt)
-  if (!publishAtIso) {
-    message.value = 'Please choose a valid publish datetime.'
-    return
-  }
-  await store.schedulePublishing(publishForm.contentId, {
-    scheduled_publish_at: publishAtIso,
-    scheduled_unpublish_at: toIsoDateTime(publishForm.unpublishAt),
-    canary: {
-      enabled: publishForm.canaryEnabled,
-      percentage: Number(publishForm.percentage),
-      duration_minutes: Number(publishForm.durationMinutes),
-      segmentation_type: 'random'
-    }
-  })
-  message.value = 'Publishing schedule saved.'
-}
-
-async function createWorkflowStage() {
-  workflowMessage.value = ''
-  try {
-    await store.createWorkflowTemplateStage({
-      stage_name: workflowStageForm.stage_name.trim(),
-      stage_order: Number(workflowStageForm.stage_order),
-      description: workflowStageForm.description.trim() || undefined,
-      is_required: workflowStageForm.is_required,
-      is_parallel: workflowStageForm.is_parallel
-    })
-    workflowMessage.value = 'Template stage created.'
-  } catch (error) {
-    workflowMessage.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-}
-
-async function initializeWorkflowForContent() {
-  workflowMessage.value = ''
-  const contentId = workflowInitForm.contentId.trim()
-  if (!contentId) {
-    workflowMessage.value = 'Provide a content ID to initialize workflow.'
-    return
-  }
-  try {
-    const result = await store.initializeContentWorkflow(contentId)
-    workflowMessage.value = `Workflow initialized: ${result.stages_created} stage(s) created.`
-  } catch (error) {
-    workflowMessage.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-}
-
-async function createCohort() {
-  if (!cohortForm.name.trim() || !cohortForm.slug.trim()) {
-    message.value = 'Provide cohort name and slug.'
-    return
-  }
-  try {
-    await store.createCohort({
-      name: cohortForm.name.trim(),
-      slug: cohortForm.slug.trim(),
-      description: cohortForm.description.trim() || undefined,
-      is_admin_defined: true
-    })
-    cohortForm.name = ''
-    cohortForm.slug = ''
-    cohortForm.description = ''
-    message.value = 'Cohort created.'
-  } catch (error) {
-    message.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-}
-
-async function takeDownContent() {
-  if (!takedownForm.contentId.trim() || !takedownForm.reason.trim()) {
-    message.value = 'Provide both content ID and takedown reason.'
-    return
-  }
-  openStepUp(async () => {
-    await store.takedownContent(takedownForm.contentId.trim(), takedownForm.reason.trim())
-    message.value = 'Content takedown completed.'
-    takedownForm.reason = ''
-  })
-}
-
-async function assignMembership() {
-  if (!membershipForm.cohortId.trim() || !membershipForm.userId.trim()) {
-    message.value = 'Provide cohort ID and user ID.'
-    return
-  }
-  openStepUp(async () => {
-    await store.assignUserToCohort(membershipForm.cohortId.trim(), membershipForm.userId.trim())
-    message.value = 'User assigned to cohort.'
-  })
-}
-
-async function removeMembership() {
-  if (!membershipForm.cohortId.trim() || !membershipForm.userId.trim()) {
-    message.value = 'Provide cohort ID and user ID.'
-    return
-  }
-  openStepUp(async () => {
-    await store.removeUserFromCohort(membershipForm.cohortId.trim(), membershipForm.userId.trim())
-    message.value = 'User removed from cohort.'
-  })
-}
-
-async function loadPublishingHistory() {
-  if (!publishingLookupForm.historyContentId.trim()) {
-    message.value = 'Provide a content ID to load publishing history.'
-    return
-  }
-  try {
-    await store.loadPublishingHistory(publishingLookupForm.historyContentId.trim())
-  } catch (error) {
-    message.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-}
-
-async function checkVisibility() {
-  if (!publishingLookupForm.visibilityContentId.trim() || !publishingLookupForm.visibilityUserId.trim()) {
-    message.value = 'Provide both content ID and user ID for visibility lookup.'
-    return
-  }
-  try {
-    await store.checkCanaryVisibility(
-      publishingLookupForm.visibilityContentId.trim(),
-      publishingLookupForm.visibilityUserId.trim()
-    )
-  } catch (error) {
-    message.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-}
-
-async function applyAuditFilters() {
-  await store.loadAuditLogs({
-    user_email: auditFilters.user_email || undefined,
-    action: auditFilters.action || undefined,
-    start_at: toIsoDateTime(auditFilters.start_at),
-    end_at: toIsoDateTime(auditFilters.end_at)
-  })
-}
-
-onMounted(async () => {
-  try {
-    await store.loadAll()
-  } catch (error) {
-    message.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-})
+const {
+  store,
+  isAdmin,
+  activeTab,
+  message,
+  riskPage,
+  riskPageCount,
+  pagedRiskTerms,
+  cohortPage,
+  cohortPageCount,
+  pagedCohorts,
+  auditPage,
+  auditPageCount,
+  pagedAuditLogs,
+  webhookPage,
+  webhookPageCount,
+  pagedWebhookDeliveries,
+  riskForm,
+  editingRiskId,
+  riskEditForm,
+  webhookForm,
+  webhookStatusFilter,
+  publishForm,
+  workflowStageForm,
+  workflowInitForm,
+  workflowMessage,
+  publishingLookupForm,
+  auditFilters,
+  expandedAuditId,
+  membershipForm,
+  cohortForm,
+  takedownForm,
+  legalHoldForm,
+  legalHoldMessage,
+  stepUpOpen,
+  stepUpLoading,
+  stepUpError,
+  cancelStepUp,
+  onStepUpConfirm,
+  prettyJson,
+  createRisk,
+  startRiskEdit,
+  cancelRiskEdit,
+  saveRiskEdit,
+  deleteRisk,
+  createWebhook,
+  refreshWebhookLogs,
+  retryDelivery,
+  schedulePublishing,
+  createWorkflowStage,
+  initializeWorkflowForContent,
+  createCohort,
+  takeDownContent,
+  assignMembership,
+  removeMembership,
+  loadPublishingHistory,
+  checkVisibility,
+  loadLegalHold,
+  setLegalHold,
+  applyAuditFilters
+} = useAdminWorkspaceView()
 </script>
 
 <template>
@@ -432,7 +117,7 @@ onMounted(async () => {
           <UICardTitle>Dictionary Management</UICardTitle>
         </UICardHeader>
         <UICardContent class="space-y-3">
-          <div v-for="term in store.riskTerms" :key="term.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
+          <div v-for="term in pagedRiskTerms" :key="term.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
             <template v-if="editingRiskId !== term.id">
               <div class="mb-2 flex items-center justify-between gap-2">
                 <div>
@@ -475,6 +160,13 @@ onMounted(async () => {
               </div>
             </template>
           </div>
+          <div v-if="store.riskTerms.length > 8" class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Showing page {{ riskPage }} of {{ riskPageCount }}</span>
+            <div class="flex gap-2">
+              <UIButton size="sm" variant="outline" :disabled="riskPage <= 1" @click="riskPage = Math.max(1, riskPage - 1)">Previous page</UIButton>
+              <UIButton size="sm" variant="outline" :disabled="riskPage >= riskPageCount" @click="riskPage = Math.min(riskPageCount, riskPage + 1)">Next page</UIButton>
+            </div>
+          </div>
         </UICardContent>
       </UICard>
     </div>
@@ -509,12 +201,19 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div v-for="cohort in store.cohorts" :key="cohort.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
+        <div v-for="cohort in pagedCohorts" :key="cohort.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
           <div class="mb-1 flex items-center justify-between">
             <p class="font-medium">{{ cohort.name }}</p>
             <UIBadge :variant="cohort.is_admin_defined ? 'default' : 'outline'">{{ cohort.is_admin_defined ? 'Admin' : 'User' }}</UIBadge>
           </div>
           <p class="text-xs text-muted-foreground">{{ cohort.members.length }} members</p>
+        </div>
+        <div v-if="store.cohorts.length > 8" class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>Showing page {{ cohortPage }} of {{ cohortPageCount }}</span>
+          <div class="flex gap-2">
+            <UIButton size="sm" variant="outline" :disabled="cohortPage <= 1" @click="cohortPage = Math.max(1, cohortPage - 1)">Previous page</UIButton>
+            <UIButton size="sm" variant="outline" :disabled="cohortPage >= cohortPageCount" @click="cohortPage = Math.min(cohortPageCount, cohortPage + 1)">Next page</UIButton>
+          </div>
         </div>
       </UICardContent>
     </UICard>
@@ -679,6 +378,25 @@ onMounted(async () => {
         <UICardDescription>Filter by user, action, and date range, then inspect before/after data.</UICardDescription>
       </UICardHeader>
       <UICardContent class="space-y-4">
+        <div v-if="isAdmin" class="rounded-lg border border-border/60 bg-background/60 p-3">
+          <p class="mb-2 text-xs uppercase tracking-[0.12em] text-muted-foreground">Legal Hold</p>
+          <div class="grid gap-2 md:grid-cols-2">
+            <UIInput v-model="legalHoldForm.userId" placeholder="User ID" />
+            <UIInput v-model="legalHoldForm.reason" placeholder="Reason (optional)" />
+          </div>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <UIButton size="sm" variant="outline" @click="loadLegalHold">Check Status</UIButton>
+            <UIButton size="sm" @click="setLegalHold(true)">Set Hold</UIButton>
+            <UIButton size="sm" variant="outline" @click="setLegalHold(false)">Unset Hold</UIButton>
+          </div>
+          <div v-if="store.legalHoldStatus" class="mt-2 text-xs text-muted-foreground">
+            <p>Status: {{ store.legalHoldStatus.legal_hold ? 'On hold' : 'Not on hold' }}</p>
+            <p>Updated: {{ store.legalHoldStatus.updated_at ? new Date(store.legalHoldStatus.updated_at).toLocaleString() : 'n/a' }}</p>
+            <p v-if="store.legalHoldStatus.reason">Reason: {{ store.legalHoldStatus.reason }}</p>
+          </div>
+          <p v-if="legalHoldMessage" class="mt-2 text-xs text-muted-foreground">{{ legalHoldMessage }}</p>
+        </div>
+
         <div class="grid gap-2 md:grid-cols-5">
           <UIInput v-model="auditFilters.user_email" placeholder="User email contains..." class="md:col-span-2" />
           <UIInput v-model="auditFilters.action" placeholder="Action (create/update/etc.)" />
@@ -697,7 +415,7 @@ onMounted(async () => {
         </div>
 
         <div class="space-y-2">
-          <div v-for="log in store.auditLogs" :key="log.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
+          <div v-for="log in pagedAuditLogs" :key="log.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
             <div class="flex items-center justify-between gap-2">
               <div>
                 <p class="text-sm font-medium">{{ log.entity_type }}</p>
@@ -722,6 +440,13 @@ onMounted(async () => {
                 <p class="mb-2 text-xs uppercase text-muted-foreground">After</p>
                 <pre class="max-h-56 overflow-auto text-xs">{{ prettyJson(log.after_data) }}</pre>
               </div>
+            </div>
+          </div>
+          <div v-if="store.auditLogs.length > 12" class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Showing page {{ auditPage }} of {{ auditPageCount }}</span>
+            <div class="flex gap-2">
+              <UIButton size="sm" variant="outline" :disabled="auditPage <= 1" @click="auditPage = Math.max(1, auditPage - 1)">Previous page</UIButton>
+              <UIButton size="sm" variant="outline" :disabled="auditPage >= auditPageCount" @click="auditPage = Math.min(auditPageCount, auditPage + 1)">Next page</UIButton>
             </div>
           </div>
         </div>
@@ -768,7 +493,7 @@ onMounted(async () => {
           </div>
         </UICardHeader>
         <UICardContent class="space-y-2">
-          <div v-for="delivery in store.webhookDeliveries" :key="delivery.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
+          <div v-for="delivery in pagedWebhookDeliveries" :key="delivery.id" class="rounded-lg border border-border/60 bg-background/60 p-3">
             <div class="flex items-start justify-between gap-2">
               <div>
                 <p class="text-sm font-medium">{{ delivery.event_name }}</p>
@@ -790,6 +515,14 @@ onMounted(async () => {
             </div>
             <p class="mt-1 text-xs text-muted-foreground">Attempts: {{ delivery.attempts }} • HTTP: {{ delivery.response_status ?? 'n/a' }}</p>
             <p v-if="delivery.last_error" class="mt-1 text-xs text-destructive">{{ delivery.last_error }}</p>
+          </div>
+
+          <div v-if="store.webhookDeliveries.length > 12" class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Showing page {{ webhookPage }} of {{ webhookPageCount }}</span>
+            <div class="flex gap-2">
+              <UIButton size="sm" variant="outline" :disabled="webhookPage <= 1" @click="webhookPage = Math.max(1, webhookPage - 1)">Previous page</UIButton>
+              <UIButton size="sm" variant="outline" :disabled="webhookPage >= webhookPageCount" @click="webhookPage = Math.min(webhookPageCount, webhookPage + 1)">Next page</UIButton>
+            </div>
           </div>
 
           <div v-if="!store.webhookDeliveries.length" class="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">

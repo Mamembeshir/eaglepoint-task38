@@ -12,6 +12,28 @@ export const api = axios.create({
   }
 })
 
+function generateIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `idem-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+api.interceptors.request.use((config) => {
+  const method = String(config.method || 'get').toLowerCase()
+  if (!['post', 'put', 'patch'].includes(method)) {
+    return config
+  }
+
+  const headers = (config.headers || {}) as Record<string, unknown>
+  if (!headers['Idempotency-Key']) {
+    headers['Idempotency-Key'] = generateIdempotencyKey()
+  }
+  config.headers = headers
+
+  return config
+})
+
 let refreshPromise: Promise<void> | null = null
 
 api.interceptors.response.use(

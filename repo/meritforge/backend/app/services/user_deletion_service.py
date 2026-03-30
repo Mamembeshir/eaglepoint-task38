@@ -27,6 +27,23 @@ def process_due_user_hard_deletions(
 
     deleted_ids: list[UUID] = []
     for user in due_users:
+        if user.legal_hold:
+            write_audit_log(
+                db,
+                action=AuditAction.UPDATE,
+                entity_type="account_deletion",
+                entity_id=str(user.id),
+                actor=actor,
+                request=request,
+                after_data={
+                    "legal_hold": True,
+                    "legal_hold_reason": user.legal_hold_reason,
+                    "source": source,
+                },
+                description="Skipped hard deletion because legal hold is active",
+            )
+            continue
+
         deleted_ids.append(user.id)
         write_audit_log(
             db,

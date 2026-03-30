@@ -56,7 +56,7 @@ def aggregate_ops_for_day(db: Session, metric_date: date) -> OpsDailyMetric:
     ) or 0
 
     interacted_user_subq = (
-        select(func.distinct(EventTelemetry.user_id))
+        select(func.distinct(EventTelemetry.user_id).label("user_id"))
         .where(
             EventTelemetry.user_id.is_not(None),
             EventTelemetry.event_type.in_(CONTENT_INTERACTION_EVENTS),
@@ -68,7 +68,7 @@ def aggregate_ops_for_day(db: Session, metric_date: date) -> OpsDailyMetric:
     interacted_users = db.scalar(select(func.count()).select_from(interacted_user_subq)) or 0
 
     applying_user_subq = (
-        select(func.distinct(EventTelemetry.user_id))
+        select(func.distinct(EventTelemetry.user_id).label("user_id"))
         .where(
             EventTelemetry.user_id.is_not(None),
             EventTelemetry.event_type.in_(APPLICATION_EVENTS),

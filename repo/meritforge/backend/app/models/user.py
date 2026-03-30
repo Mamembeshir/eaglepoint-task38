@@ -55,6 +55,9 @@ class User(Base):
     deletion_requested_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     scheduled_deletion_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     deletion_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    legal_hold: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    legal_hold_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    legal_hold_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

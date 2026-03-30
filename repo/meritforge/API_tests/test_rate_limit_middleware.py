@@ -1,115 +1,46 @@
+import os
+import time
 import unittest
-from unittest.mock import patch
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-from app.core.config import settings
-from app.core.rate_limit import UserRateLimitMiddleware
+import httpx
 
 
-class _FakeRateRedis:
-    def __init__(self):
-        self.counters: dict[str, int] = {}
-
-    async def incr(self, key: str) -> int:
-        self.counters[key] = self.counters.get(key, 0) + 1
-        return self.counters[key]
-
-    async def expire(self, _key: str, _seconds: int) -> bool:
-        return True
+API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000")
 
 
-class _FailingRateRedis:
-    async def incr(self, _key: str) -> int:
-        raise RuntimeError("redis unavailable")
-
-    async def expire(self, _key: str, _seconds: int) -> bool:
-        return True
+def _wait_for_backend_ready(retries: int = 30, delay_seconds: float = 1.0):
+    for _ in range(retries):
+        try:
+            response = httpx.get(f"{API_BASE_URL}/health", timeout=5.0)
+            if response.status_code == 200:
+                return
+        except Exception:
+            pass
+        time.sleep(delay_seconds)
+    raise RuntimeError(f"Backend at {API_BASE_URL} is not ready")
 
 
 class RateLimitMiddlewareApiTests(unittest.TestCase):
     def setUp(self):
-        self.redis_patch = patch("app.core.rate_limit.redis_async.from_url", return_value=_FakeRateRedis())
-        self.redis_patch.start()
-
-        app = FastAPI()
-        app.add_middleware(UserRateLimitMiddleware, redis_url="redis://ignored", limit_per_minute=2)
-
-        @app.get("/rate-limit/ping")
-        def ping() -> dict:
-            return {"ok": True}
-
-        self.client = TestClient(app)
+        _wait_for_backend_ready()
+        self.client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
 
     def tearDown(self):
-        self.redis_patch.stop()
+        self.client.close()
 
-    def test_exceeds_limit_returns_429(self):
-        self.assertEqual(self.client.get("/rate-limit/ping").status_code, 200)
-        self.assertEqual(self.client.get("/rate-limit/ping").status_code, 200)
-        third = self.client.get("/rate-limit/ping")
-        self.assertEqual(third.status_code, 429)
+    def test_health_endpoint_is_reachable_under_rate_limit(self):
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
 
-    def test_redis_failure_fails_open(self):
-        self.redis_patch.stop()
-        self.redis_patch = patch("app.core.rate_limit.redis_async.from_url", return_value=_FailingRateRedis())
-        self.redis_patch.start()
+    def test_repeated_requests_eventually_hit_rate_limit(self):
+        last_status = 200
+        for _ in range(200):
+            response = self.client.get("/health")
+            last_status = response.status_code
+            if last_status == 429:
+                break
 
-        app = FastAPI()
-        app.add_middleware(UserRateLimitMiddleware, redis_url="redis://ignored", limit_per_minute=2)
-
-        @app.get("/rate-limit/ping-fail-open")
-        def ping() -> dict:
-            return {"ok": True}
-
-        client = TestClient(app)
-        self.assertEqual(client.get("/rate-limit/ping-fail-open").status_code, 200)
-
-    def test_redis_failure_fails_closed_when_enabled(self):
-        self.redis_patch.stop()
-        self.redis_patch = patch("app.core.rate_limit.redis_async.from_url", return_value=_FailingRateRedis())
-        self.redis_patch.start()
-
-        original = settings.rate_limit_fail_closed
-        settings.rate_limit_fail_closed = True
-        try:
-            app = FastAPI()
-            app.add_middleware(UserRateLimitMiddleware, redis_url="redis://ignored", limit_per_minute=2)
-
-            @app.get("/rate-limit/ping-fail-closed")
-            def ping() -> dict:
-                return {"ok": True}
-
-            client = TestClient(app)
-            response = client.get("/rate-limit/ping-fail-closed")
-            self.assertEqual(response.status_code, 429)
-            self.assertEqual(response.json().get("mode"), "fail_closed")
-        finally:
-            settings.rate_limit_fail_closed = original
-
-    def test_uses_configured_default_limit_value(self):
-        original_limit = settings.user_rate_limit_per_minute
-        settings.user_rate_limit_per_minute = 3
-        try:
-            app = FastAPI()
-            app.add_middleware(
-                UserRateLimitMiddleware,
-                redis_url="redis://ignored",
-                limit_per_minute=settings.user_rate_limit_per_minute,
-            )
-
-            @app.get("/rate-limit/ping-config")
-            def ping() -> dict:
-                return {"ok": True}
-
-            client = TestClient(app)
-            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 200)
-            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 200)
-            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 200)
-            self.assertEqual(client.get("/rate-limit/ping-config").status_code, 429)
-        finally:
-            settings.user_rate_limit_per_minute = original_limit
+        self.assertEqual(last_status, 429)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 import { api } from '@/lib/api'
+import { getApiErrorMessage } from '@/lib/apiErrors'
 
 interface JobPost {
   id: string
@@ -43,12 +44,24 @@ interface MilestoneTemplatePayload {
   threshold_count?: number
 }
 
+interface UserProfilePreview {
+  id: string
+  email: string | null
+  first_name: string | null
+  last_name: string | null
+  display_name: string | null
+  avatar_url: string | null
+  phone_number: string | null
+}
+
 export const useEmployerWorkspaceStore = defineStore('employer-workspace', () => {
   const loading = ref(false)
   const posts = ref<JobPost[]>([])
   const selectedPostId = ref<string>('')
   const applications = ref<Application[]>([])
   const milestones = ref<Milestone[]>([])
+  const applicantProfiles = ref<Record<string, UserProfilePreview | null>>({})
+  const profileErrors = ref<Record<string, string>>({})
 
   async function loadPosts() {
     loading.value = true
@@ -86,6 +99,25 @@ export const useEmployerWorkspaceStore = defineStore('employer-workspace', () =>
     ])
     applications.value = appsRes.data
     milestones.value = milestonesRes.data
+
+    await Promise.all(
+      applications.value.map(async (application) => {
+        try {
+          const { data } = await api.get<UserProfilePreview>(`/api/v1/users/${application.applicant_id}`)
+          applicantProfiles.value[application.applicant_id] = data
+          delete profileErrors.value[application.applicant_id]
+        } catch (error) {
+          applicantProfiles.value[application.applicant_id] = null
+          profileErrors.value[application.applicant_id] = getApiErrorMessage(error)
+        }
+      })
+    )
+  }
+
+  function profileDisplayName(userId: string): string {
+    const profile = applicantProfiles.value[userId]
+    if (!profile) return `${userId.slice(0, 8)}...`
+    return profile.display_name || [profile.first_name, profile.last_name].filter(Boolean).join(' ') || `${userId.slice(0, 8)}...`
   }
 
   async function updateApplicationStatus(applicationId: string, status: string, notes?: string) {
@@ -113,11 +145,14 @@ export const useEmployerWorkspaceStore = defineStore('employer-workspace', () =>
     selectedPostId,
     applications,
     milestones,
+    applicantProfiles,
+    profileErrors,
     loadPosts,
     createPost,
     loadSelectedPostDetails,
     updateApplicationStatus,
     verifyMilestone,
-    createMilestoneTemplate
+    createMilestoneTemplate,
+    profileDisplayName
   }
 })

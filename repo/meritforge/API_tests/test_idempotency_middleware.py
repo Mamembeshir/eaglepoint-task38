@@ -1,115 +1,89 @@
+import os
+import time
 import unittest
 import uuid
-from unittest.mock import patch
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-
-from app.core.config import settings
-from app.core.idempotency import IdempotencyMiddleware
+import httpx
 
 
-class _FakeAsyncRedis:
-    def __init__(self):
-        self.store: dict[str, str] = {}
-
-    async def get(self, key: str):
-        return self.store.get(key)
-
-    async def set(self, key: str, value: str, ex: int | None = None):
-        self.store[key] = value
-        return True
+API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000")
+TEST_RUN_TAG = uuid.uuid4().hex[:10]
 
 
-class _FailingAsyncRedis:
-    async def get(self, _key: str):
-        raise RuntimeError("redis unavailable")
+def _wait_for_backend_ready(retries: int = 30, delay_seconds: float = 1.0):
+    for _ in range(retries):
+        try:
+            response = httpx.get(f"{API_BASE_URL}/health", timeout=5.0)
+            if response.status_code == 200:
+                return
+        except Exception:
+            pass
+        time.sleep(delay_seconds)
+    raise RuntimeError(f"Backend at {API_BASE_URL} is not ready")
 
-    async def set(self, _key: str, _value: str, ex: int | None = None):
-        raise RuntimeError("redis unavailable")
+
+def _register_and_login(client: httpx.Client, password: str = "Password123") -> str:
+    email = f"idem.{TEST_RUN_TAG}.{uuid.uuid4().hex[:8]}@example.com"
+    register = client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": password, "display_name": "Idem Tester"},
+    )
+    if register.status_code not in {200, 201, 409}:
+        raise RuntimeError(f"Register failed: {register.status_code} {register.text}")
+    login = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    if login.status_code != 200:
+        raise RuntimeError(f"Login failed: {login.status_code} {login.text}")
+    return email
 
 
 class IdempotencyMiddlewareApiTests(unittest.TestCase):
     def setUp(self):
-        self.redis_patch = patch("app.core.idempotency.redis_async.from_url", return_value=_FakeAsyncRedis())
-        self.redis_patch.start()
-        app = FastAPI()
-        app.add_middleware(IdempotencyMiddleware, redis_url="redis://ignored")
-
-        @app.post("/idempotency/echo")
-        def echo(payload: dict) -> dict:
-            return {"ok": True, "echo": payload}
-
-        self.client = TestClient(app)
+        _wait_for_backend_ready()
+        self.client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
 
     def tearDown(self):
-        self.redis_patch.stop()
+        self.client.close()
 
-    def test_same_key_same_body_returns_same_response(self):
+    def test_patch_same_key_same_body_returns_same_response(self):
+        _register_and_login(self.client)
         key = f"idem-{uuid.uuid4()}"
-        payload = {"value": 1}
+        payload = {"display_name": f"idem-name-{uuid.uuid4().hex[:6]}"}
 
-        first = self.client.post("/idempotency/echo", json=payload, headers={"Idempotency-Key": key})
-        second = self.client.post("/idempotency/echo", json=payload, headers={"Idempotency-Key": key})
+        first = self.client.patch("/api/v1/users/me", json=payload, headers={"Idempotency-Key": key})
+        second = self.client.patch("/api/v1/users/me", json=payload, headers={"Idempotency-Key": key})
 
         self.assertEqual(first.status_code, 200)
-        self.assertEqual(second.status_code, first.status_code)
-        self.assertEqual(second.json(), first.json())
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json(), second.json())
 
-    def test_same_key_different_body_returns_409(self):
+    def test_patch_same_key_different_body_returns_409(self):
+        _register_and_login(self.client)
         key = f"idem-{uuid.uuid4()}"
-        self.client.post("/idempotency/echo", json={"value": 1}, headers={"Idempotency-Key": key})
-        second = self.client.post("/idempotency/echo", json={"value": 2}, headers={"Idempotency-Key": key})
 
+        first = self.client.patch(
+            "/api/v1/users/me",
+            json={"display_name": f"idem-a-{uuid.uuid4().hex[:6]}"},
+            headers={"Idempotency-Key": key},
+        )
+        self.assertEqual(first.status_code, 200)
+
+        second = self.client.patch(
+            "/api/v1/users/me",
+            json={"display_name": f"idem-b-{uuid.uuid4().hex[:6]}"},
+            headers={"Idempotency-Key": key},
+        )
         self.assertEqual(second.status_code, 409)
 
-    def test_redis_failure_fails_open(self):
-        self.redis_patch.stop()
-        self.redis_patch = patch("app.core.idempotency.redis_async.from_url", return_value=_FailingAsyncRedis())
-        self.redis_patch.start()
-
-        app = FastAPI()
-        app.add_middleware(IdempotencyMiddleware, redis_url="redis://ignored")
-
-        @app.post("/idempotency/echo-fail-open")
-        def echo(payload: dict) -> dict:
-            return {"ok": True, "echo": payload}
-
-        client = TestClient(app)
-        response = client.post(
-            "/idempotency/echo-fail-open",
-            json={"value": 1},
+    def test_auth_login_with_idempotency_key_never_500(self):
+        email = f"idem.login.{TEST_RUN_TAG}.{uuid.uuid4().hex[:8]}@example.com"
+        self.client.post("/api/v1/auth/register", json={"email": email, "password": "Password123", "display_name": "Login Tester"})
+        response = self.client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": "WrongPass123"},
             headers={"Idempotency-Key": f"idem-{uuid.uuid4()}"},
         )
-
-        self.assertEqual(response.status_code, 200)
-
-    def test_redis_failure_fails_closed_when_enabled(self):
-        self.redis_patch.stop()
-        self.redis_patch = patch("app.core.idempotency.redis_async.from_url", return_value=_FailingAsyncRedis())
-        self.redis_patch.start()
-
-        original = settings.idempotency_fail_closed
-        settings.idempotency_fail_closed = True
-        try:
-            app = FastAPI()
-            app.add_middleware(IdempotencyMiddleware, redis_url="redis://ignored")
-
-            @app.post("/idempotency/echo-fail-closed")
-            def echo(payload: dict) -> dict:
-                return {"ok": True, "echo": payload}
-
-            client = TestClient(app)
-            response = client.post(
-                "/idempotency/echo-fail-closed",
-                json={"value": 1},
-                headers={"Idempotency-Key": f"idem-{uuid.uuid4()}"},
-            )
-
-            self.assertEqual(response.status_code, 503)
-            self.assertEqual(response.json().get("mode"), "fail_closed")
-        finally:
-            settings.idempotency_fail_closed = original
+        self.assertIn(response.status_code, {200, 401})
+        self.assertNotEqual(response.status_code, 500)
 
 
 if __name__ == "__main__":

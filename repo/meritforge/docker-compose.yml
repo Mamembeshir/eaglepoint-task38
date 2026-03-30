@@ -98,7 +98,7 @@ services:
       REFRESH_TOKEN_HASH_ACTIVE_KEY_ID: ${REFRESH_TOKEN_HASH_ACTIVE_KEY_ID:-legacy-sha256}
       REFRESH_TOKEN_HASH_ROTATION_DAYS: ${REFRESH_TOKEN_HASH_ROTATION_DAYS:-180}
       ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
-      SECURE_COOKIES: ${SECURE_COOKIES:-true}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
       ACCESS_COOKIE_NAME: ${ACCESS_COOKIE_NAME:-access_token}
       REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-refresh_token}
       STEP_UP_COOKIE_NAME: ${STEP_UP_COOKIE_NAME:-step_up_token}
@@ -106,14 +106,25 @@ services:
       USER_RATE_LIMIT_PER_MINUTE: ${USER_RATE_LIMIT_PER_MINUTE:-120}
       RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-false}
       IDEMPOTENCY_FAIL_CLOSED: ${IDEMPOTENCY_FAIL_CLOSED:-false}
+      INTEGRATION_HMAC_KEYS: ${INTEGRATION_HMAC_KEYS:-integration-key-a:integration-secret-a,integration-key-b:integration-secret-b}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost,http://localhost:3000,http://localhost}
       DEBUG: ${DEBUG:-false}
       SEED_DEV_PASSWORD: ${SEED_DEV_PASSWORD:-MeritForgeDev!2026}
       PYTHONPATH: /app
+      ENABLE_BACKEND_COVERAGE: ${ENABLE_BACKEND_COVERAGE:-true}
+      COVERAGE_FILE: /coverage/.coverage.backend
     volumes:
       - ./backend/app:/app/app:ro
       - ./backend/scripts:/app/scripts:ro
       - backend_uploads:/app/uploads
+      - backend_coverage:/coverage
+    command: >
+      sh -c "
+      if [ \"$${ENABLE_BACKEND_COVERAGE}\" = \"true\" ]; then
+        coverage run --parallel-mode -m uvicorn app.main:app --host 0.0.0.0 --port 8000;
+      else
+        uvicorn app.main:app --host 0.0.0.0 --port 8000;
+      fi"
     depends_on:
       db:
         condition: service_healthy
@@ -121,6 +132,12 @@ services:
         condition: service_healthy
     networks:
       - meritforge-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   test:
     build:
@@ -149,25 +166,32 @@ services:
       USER_RATE_LIMIT_PER_MINUTE: ${USER_RATE_LIMIT_PER_MINUTE:-120}
       RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-false}
       IDEMPOTENCY_FAIL_CLOSED: ${IDEMPOTENCY_FAIL_CLOSED:-false}
+      INTEGRATION_HMAC_KEYS: ${INTEGRATION_HMAC_KEYS:-integration-key-a:integration-secret-a,integration-key-b:integration-secret-b}
+      API_BASE_URL: http://backend:8000
       PYTHONPATH: /app
       COVERAGE_RCFILE: /tests/.coveragerc
     working_dir: /tests
     command: >
       sh -c "coverage erase &&
-      coverage run -m unittest discover -s unit_tests -p 'test_*.py' -v &&
-      coverage run --append -m unittest discover -s API_tests -p 'test_*.py' -v &&
+      coverage run -m pytest unit_tests API_tests -v &&
+      cd /tests/frontend && npm ci && npm run test:run && cd /tests &&
+      coverage combine . /coverage &&
       coverage report &&
       coverage html"
     volumes:
       - ./backend:/app:ro
       - ./unit_tests:/tests/unit_tests:ro
       - ./API_tests:/tests/API_tests:ro
+      - ./frontend:/tests/frontend:ro
       - ./.coveragerc:/tests/.coveragerc:ro
       - ./coverage_html:/tests/coverage_html
+      - backend_coverage:/coverage
     depends_on:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      backend:
         condition: service_healthy
     networks:
       - meritforge-network
@@ -296,6 +320,7 @@ volumes:
   postgres_data:
   redis_data:
   backend_uploads:
+  backend_coverage:
 
 networks:
   meritforge-network:

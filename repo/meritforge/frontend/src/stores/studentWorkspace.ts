@@ -4,86 +4,19 @@ import { computed, ref } from 'vue'
 import { api } from '@/lib/api'
 import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
 import { useAuthStore } from '@/stores/auth'
-
-type AnnotationVisibility = 'private' | 'cohort' | 'public'
-type AnnotationVisibilitySelection = 'private' | 'cohort'
-
-interface CareerVideo {
-  id: string
-  title: string
-  topic: string
-  durationSeconds: number
-  summary: string
-  streamUrl: string
-  poster: string
-  contentType: 'video' | 'article' | 'job_announcement'
-  status: 'published' | 'retracted'
-  retractedAt: string | null
-  retractionNotice: string | null
-  jobPostId: string | null
-}
-
-interface ContentItem {
-  id: string
-  title: string
-  content_type: 'video' | 'article' | 'job_announcement'
-  media_url?: string | null
-  metadata?: Record<string, unknown> | null
-  summary?: string | null
-  status: 'published' | 'retracted'
-  retracted_at?: string | null
-  retraction_notice?: string | null
-  job_post_id?: string | null
-}
-
-interface StudentApplication {
-  id: string
-  job_post_id: string
-  status: string
-  created_at: string
-}
-
-interface CohortOption {
-  id: string
-  name: string
-  slug: string
-}
-
-interface Milestone {
-  id: string
-  milestone_name: string
-  source: string
-  progress_value: number
-  target_value: number
-  achievement_date: string | null
-  updated_at: string
-}
-
-interface AnnotationItem {
-  id: string
-  annotation_text: string | null
-  visibility: AnnotationVisibility
-  cohort_id: string | null
-  updated_at: string
-}
-
-interface BookmarkItem {
-  id: string
-  content_id: string
-  is_favorite: boolean
-}
-
-interface TopicSubscriptionItem {
-  id: string
-  topic: string
-  created_at: string
-}
-
-interface AnnotationSelectionPayload {
-  startOffset: number
-  endOffset: number
-  highlightedText: string
-}
+import { isUuid, mapContentToVideo } from '@/stores/workspace/studentWorkspace.helpers'
+import type {
+  AnnotationItem,
+  AnnotationSelectionPayload,
+  AnnotationVisibilitySelection,
+  BookmarkItem,
+  CareerVideo,
+  CohortOption,
+  ContentItem,
+  Milestone,
+  StudentApplication,
+  TopicSubscriptionItem
+} from '@/stores/workspace/studentWorkspace.types'
 
 export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   const auth = useAuthStore()
@@ -109,37 +42,6 @@ export const useStudentWorkspaceStore = defineStore('student-workspace', () => {
   const currentVideo = computed(() => videos.value.find((v) => v.id === currentVideoId.value) ?? videos.value[0])
   const privateBookshelf = computed(() => videos.value.filter((v) => bookmarkedVideoIds.value.includes(v.id)))
   const videoItems = computed(() => videos.value.filter((item) => item.contentType === 'video'))
-
-  function mapContentToVideo(item: ContentItem): CareerVideo {
-    const metadata = (item.metadata ?? {}) as Record<string, unknown>
-    const topic = typeof metadata.topic === 'string' ? metadata.topic : item.content_type.replace('_', '-')
-    const durationSeconds = typeof metadata.duration_seconds === 'number'
-      ? metadata.duration_seconds
-      : Number(metadata.duration_seconds) || 0
-    const streamUrl = item.media_url || (typeof metadata.stream_url === 'string' ? metadata.stream_url : '')
-    const poster = typeof metadata.poster_url === 'string' ? metadata.poster_url : ''
-    const summary = item.summary || (typeof metadata.summary === 'string' ? metadata.summary : '')
-
-    return {
-      id: item.id,
-      title: item.title,
-      topic,
-      durationSeconds,
-      summary,
-      streamUrl,
-      poster,
-      contentType: item.content_type,
-      status: item.status,
-      retractedAt: item.retracted_at ?? null,
-      retractionNotice: item.retraction_notice ?? null,
-      jobPostId: item.job_post_id ?? null
-    }
-  }
-
-  function isUuid(value: string | null | undefined) {
-    if (!value) return false
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-  }
 
   async function sendTelemetry(
     eventType: 'play' | 'skip' | 'favorite' | 'search' | 'job_application',

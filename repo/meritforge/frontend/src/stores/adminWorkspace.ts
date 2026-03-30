@@ -1,121 +1,19 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { api } from '@/lib/api'
-
-export interface RiskTerm {
-  id: string
-  term: string
-  category: string
-  severity: string
-  description: string | null
-  replacement_suggestion: string | null
-  is_active: boolean
-  is_regex: boolean
-  match_count: number
-  created_at: string
-}
-
-interface CohortMember {
-  id: string
-  email: string
-  display_name: string | null
-}
-
-interface CohortWithMembers {
-  id: string
-  name: string
-  slug: string
-  description: string | null
-  is_admin_defined: boolean
-  is_active: boolean
-  created_at: string
-  members: CohortMember[]
-}
-
-export interface AuditLogItem {
-  id: string
-  action: string
-  entity_type: string
-  entity_id: string | null
-  user_id: string | null
-  user_email: string | null
-  ip_address: string | null
-  description: string | null
-  request_url: string | null
-  request_method: string | null
-  before_data: unknown
-  after_data: unknown
-  changes: unknown
-  created_at: string
-}
-
-interface WebhookConfig {
-  id: string
-  name: string
-  url: string
-  events: string[]
-  is_active: boolean
-  retry_count: number
-  retry_delay_seconds: number
-  timeout_seconds: number
-  created_at: string
-}
-
-export interface WebhookDelivery {
-  id: string
-  webhook_config_id: string
-  event_name: string
-  status: string
-  attempts: number
-  response_status: number | null
-  last_error: string | null
-  queued_at: string
-  delivered_at: string | null
-  created_at: string
-}
-
-export interface WorkflowTemplateStage {
-  id: string
-  stage_name: string
-  stage_order: number
-  description: string | null
-  is_required: boolean
-  is_parallel: boolean
-  is_active: boolean
-  created_by_id: string | null
-  created_at: string
-}
-
-interface WorkflowInitResponse {
-  content_id: string
-  stages_created: number
-  status: string
-}
-
-interface AuditFilters {
-  user_email?: string
-  action?: string
-  start_at?: string
-  end_at?: string
-}
-
-interface PublishingHistoryItem {
-  id: string
-  action: string
-  actor_id: string | null
-  reason: string | null
-  before_state: Record<string, unknown> | null
-  after_state: Record<string, unknown> | null
-  created_at: string
-}
-
-interface CanaryVisibilityResult {
-  content_id: string
-  user_id: string
-  visible: boolean
-  reason: string
-}
+import { adminWorkspaceClient } from '@/stores/workspace/adminWorkspace.client'
+import type {
+  AuditFilters,
+  AuditLogItem,
+  CanaryVisibilityResult,
+  CohortWithMembers,
+  LegalHoldStatus,
+  PublishingHistoryItem,
+  RiskTerm,
+  WebhookConfig,
+  WebhookDelivery,
+  WorkflowTemplateStage
+} from '@/stores/workspace/adminWorkspace.types'
 
 export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
   const loading = ref(false)
@@ -127,48 +25,30 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
   const workflowTemplateStages = ref<WorkflowTemplateStage[]>([])
   const publishingHistory = ref<PublishingHistoryItem[]>([])
   const canaryVisibilityResult = ref<CanaryVisibilityResult | null>(null)
+  const legalHoldStatus = ref<LegalHoldStatus | null>(null)
 
   async function loadRiskTerms() {
-    const { data } = await api.get<RiskTerm[]>('/api/v1/admin/risk-dictionary')
-    riskTerms.value = data
+    riskTerms.value = await adminWorkspaceClient.loadRiskTerms()
   }
 
   async function loadCohorts() {
-    const { data } = await api.get<CohortWithMembers[]>('/api/v1/admin/cohorts')
-    cohorts.value = data
+    cohorts.value = await adminWorkspaceClient.loadCohorts()
   }
 
   async function loadWebhookConfigs() {
-    const { data } = await api.get<WebhookConfig[]>('/api/v1/webhooks/configs')
-    webhookConfigs.value = data
+    webhookConfigs.value = await adminWorkspaceClient.loadWebhookConfigs()
   }
 
   async function loadWebhookDeliveries(status?: string) {
-    const { data } = await api.get<WebhookDelivery[]>('/api/v1/webhooks/deliveries', {
-      params: {
-        status: status || undefined,
-        limit: 200
-      }
-    })
-    webhookDeliveries.value = data
+    webhookDeliveries.value = await adminWorkspaceClient.loadWebhookDeliveries(status)
   }
 
   async function loadAuditLogs(filters: AuditFilters = {}) {
-    const { data } = await api.get<{ items: AuditLogItem[] }>('/api/v1/audit-logs', {
-      params: {
-        limit: 100,
-        user_email: filters.user_email || undefined,
-        action: filters.action || undefined,
-        start_at: filters.start_at || undefined,
-        end_at: filters.end_at || undefined
-      }
-    })
-    auditLogs.value = data.items
+    auditLogs.value = await adminWorkspaceClient.loadAuditLogs(filters)
   }
 
   async function loadWorkflowTemplateStages() {
-    const { data } = await api.get<WorkflowTemplateStage[]>('/api/v1/review-workflow/templates/stages')
-    workflowTemplateStages.value = data
+    workflowTemplateStages.value = await adminWorkspaceClient.loadWorkflowTemplateStages()
   }
 
   async function createCohort(payload: {
@@ -177,7 +57,7 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     description?: string
     is_admin_defined?: boolean
   }) {
-    await api.post('/api/v1/cohorts', payload)
+    await adminWorkspaceClient.createCohort(payload)
     await loadCohorts()
   }
 
@@ -205,7 +85,7 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     replacement_suggestion?: string
     is_regex?: boolean
   }) {
-    await api.post('/api/v1/admin/risk-dictionary', payload)
+    await adminWorkspaceClient.createRiskTerm(payload)
     await loadRiskTerms()
   }
 
@@ -218,12 +98,12 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     is_active?: boolean
     is_regex?: boolean
   }) {
-    await api.patch(`/api/v1/admin/risk-dictionary/${id}`, payload)
+    await adminWorkspaceClient.updateRiskTerm(id, payload)
     await loadRiskTerms()
   }
 
   async function deleteRiskTerm(id: string) {
-    await api.delete(`/api/v1/admin/risk-dictionary/${id}`)
+    await adminWorkspaceClient.deleteRiskTerm(id)
     await loadRiskTerms()
   }
 
@@ -236,12 +116,12 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     retry_delay_seconds?: number
     timeout_seconds?: number
   }) {
-    await api.post('/api/v1/webhooks/configs', payload)
+    await adminWorkspaceClient.createWebhook(payload)
     await Promise.all([loadWebhookConfigs(), loadWebhookDeliveries()])
   }
 
   async function retryWebhookDelivery(deliveryId: string) {
-    await api.post(`/api/v1/webhooks/deliveries/${deliveryId}/retry`)
+    await adminWorkspaceClient.retryWebhookDelivery(deliveryId)
     await loadWebhookDeliveries()
   }
 
@@ -256,22 +136,22 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
       target_cohort_ids?: string[]
     }
   }) {
-    await api.post(`/api/v1/publishing/content/${contentId}/schedule`, payload)
+    await adminWorkspaceClient.schedulePublishing(contentId, payload)
     await loadAuditLogs()
   }
 
   async function takedownContent(contentId: string, reason: string) {
-    await api.post(`/api/v1/publishing/content/${contentId}/takedown`, { reason })
+    await adminWorkspaceClient.takedownContent(contentId, reason)
     await loadAuditLogs()
   }
 
   async function assignUserToCohort(cohortId: string, userId: string) {
-    await api.post(`/api/v1/cohorts/${cohortId}/users/${userId}`)
+    await adminWorkspaceClient.assignUserToCohort(cohortId, userId)
     await loadCohorts()
   }
 
   async function removeUserFromCohort(cohortId: string, userId: string) {
-    await api.delete(`/api/v1/cohorts/${cohortId}/users/${userId}`)
+    await adminWorkspaceClient.removeUserFromCohort(cohortId, userId)
     await loadCohorts()
   }
 
@@ -282,23 +162,33 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     is_required: boolean
     is_parallel: boolean
   }) {
-    await api.post('/api/v1/review-workflow/templates/stages', payload)
+    await adminWorkspaceClient.createWorkflowTemplateStage(payload)
     await loadWorkflowTemplateStages()
   }
 
   async function initializeContentWorkflow(contentId: string) {
-    const { data } = await api.post<WorkflowInitResponse>(`/api/v1/review-workflow/contents/${contentId}/initialize`)
-    return data
+    return adminWorkspaceClient.initializeContentWorkflow(contentId)
   }
 
   async function loadPublishingHistory(contentId: string) {
-    const { data } = await api.get<PublishingHistoryItem[]>(`/api/v1/publishing/content/${contentId}/history`)
-    publishingHistory.value = data
+    publishingHistory.value = await adminWorkspaceClient.loadPublishingHistory(contentId)
   }
 
   async function checkCanaryVisibility(contentId: string, userId: string) {
-    const { data } = await api.get<CanaryVisibilityResult>(`/api/v1/publishing/content/${contentId}/visibility/${userId}`)
+    const data = await adminWorkspaceClient.checkCanaryVisibility(contentId, userId)
     canaryVisibilityResult.value = data
+    return data
+  }
+
+  async function getLegalHoldStatus(userId: string) {
+    const data = await adminWorkspaceClient.getLegalHoldStatus(userId)
+    legalHoldStatus.value = data
+    return data
+  }
+
+  async function updateLegalHold(userId: string, payload: { legal_hold: boolean; reason?: string }) {
+    const data = await adminWorkspaceClient.updateLegalHold(userId, payload)
+    legalHoldStatus.value = data
     return data
   }
 
@@ -312,6 +202,7 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     workflowTemplateStages,
     publishingHistory,
     canaryVisibilityResult,
+    legalHoldStatus,
     loadAll,
     loadRiskTerms,
     loadAuditLogs,
@@ -330,6 +221,8 @@ export const useAdminWorkspaceStore = defineStore('admin-workspace', () => {
     createWorkflowTemplateStage,
     initializeContentWorkflow,
     loadPublishingHistory,
-    checkCanaryVisibility
+    checkCanaryVisibility,
+    getLegalHoldStatus,
+    updateLegalHold
   }
 })

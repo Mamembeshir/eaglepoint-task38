@@ -14,6 +14,14 @@ class ContentSubmissionRequest(BaseModel):
     metadata: dict | None = None
 
 
+class ContentRevisionRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=3, max_length=255)
+    body: str | None = None
+    media_url: str | None = Field(default=None, max_length=500)
+    metadata: dict | None = None
+    change_summary: str = Field(default="Revision submission", min_length=3, max_length=500)
+
+
 class TriggeredWordOut(BaseModel):
     term: str
     severity: str
@@ -31,6 +39,15 @@ class ContentSubmissionOut(BaseModel):
     blocked_until_final_approval: bool
     required_distinct_reviewers: int
     triggering_words: list[TriggeredWordOut]
+    created_at: datetime
+
+
+class ContentRevisionOut(BaseModel):
+    content_id: UUID
+    version_id: UUID
+    version_number: int
+    status: ContentStatus
+    stages_created: int
     created_at: datetime
 
 

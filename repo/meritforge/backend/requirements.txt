@@ -17,3 +17,4 @@ python-multipart==0.0.6
 email-validator==2.1.0
 httpx==0.26.0
 coverage==7.6.1
+pytest==8.3.3

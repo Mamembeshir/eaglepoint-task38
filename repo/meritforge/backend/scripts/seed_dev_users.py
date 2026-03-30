@@ -12,6 +12,7 @@ from app.models.user import User
 SEED_ACCOUNTS = [
     ("student.meritforge@gmail.com", RoleType.STUDENT, "Student"),
     ("employer.meritforge@gmail.com", RoleType.EMPLOYER_MANAGER, "Employer Manager"),
+    ("employer2.meritforge@gmail.com", RoleType.EMPLOYER_MANAGER, "Employer Manager Two"),
     ("author.meritforge@gmail.com", RoleType.CONTENT_AUTHOR, "Content Author"),
     ("reviewer.meritforge@gmail.com", RoleType.REVIEWER, "Reviewer"),
     ("admin.meritforge@gmail.com", RoleType.SYSTEM_ADMINISTRATOR, "System Administrator"),
@@ -20,6 +21,7 @@ SEED_ACCOUNTS = [
 LEGACY_SEED_EMAILS = {
     "student@meritforge.local",
     "employer@meritforge.local",
+    "employer2@meritforge.local",
     "author@meritforge.local",
     "reviewer@meritforge.local",
     "admin@meritforge.local",

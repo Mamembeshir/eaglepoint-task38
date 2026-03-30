@@ -23,6 +23,8 @@ from app.schemas.user_management import (
     DeletionStatusOut,
     ExportUserDataOut,
     ImportUserDataRequest,
+    LegalHoldStatusOut,
+    LegalHoldUpdateRequest,
     MarkDeletionRequest,
     ProcessDeletionResult,
     UserProfileOut,
@@ -41,8 +43,9 @@ def _is_admin(user: User) -> bool:
 
 def _profile_payload(target: User, viewer: User) -> UserProfileOut:
     is_self = target.id == viewer.id
-    show_contact = is_self or target.consent_contact_info_visible
-    show_photo = is_self or target.consent_photo_visible
+    is_admin = _is_admin(viewer)
+    show_contact = is_self or is_admin or target.consent_contact_info_visible
+    show_photo = is_self or is_admin or target.consent_photo_visible
 
     return UserProfileOut(
         id=target.id,
@@ -69,9 +72,6 @@ def get_my_profile(current_user: User = Depends(get_current_user)) -> UserProfil
 
 @router.get("/users/{user_id}", response_model=UserProfileOut)
 def get_user_profile(user_id: UUID, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)) -> UserProfileOut:
-    if user_id != current_user.id and not _is_admin(current_user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed to access this user profile")
-
     user = db.scalar(select(User).where(User.id == user_id, User.is_active.is_(True)))
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -404,3 +404,61 @@ def process_due_hard_deletions(
 
     db.commit()
     return ProcessDeletionResult(deleted_count=len(deleted_ids), deleted_user_ids=deleted_ids)
+
+
+@router.get("/admin/users/{user_id}/legal-hold", response_model=LegalHoldStatusOut)
+def get_legal_hold_status(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(RoleType.SYSTEM_ADMINISTRATOR)),
+) -> LegalHoldStatusOut:
+    user = db.scalar(select(User).where(User.id == user_id, User.is_active.is_(True)))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    return LegalHoldStatusOut(
+        user_id=user.id,
+        legal_hold=user.legal_hold,
+        reason=user.legal_hold_reason,
+        updated_at=user.legal_hold_updated_at,
+    )
+
+
+@router.patch("/admin/users/{user_id}/legal-hold", response_model=LegalHoldStatusOut)
+def update_legal_hold_status(
+    user_id: UUID,
+    payload: LegalHoldUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(RoleType.SYSTEM_ADMINISTRATOR)),
+) -> LegalHoldStatusOut:
+    user = db.scalar(select(User).where(User.id == user_id, User.is_active.is_(True)))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.legal_hold = payload.legal_hold
+    user.legal_hold_reason = payload.reason
+    user.legal_hold_updated_at = datetime.now(timezone.utc)
+
+    write_audit_log(
+        db,
+        action=AuditAction.UPDATE,
+        entity_type="legal_hold",
+        entity_id=str(user.id),
+        actor=current_user,
+        request=request,
+        after_data={
+            "legal_hold": user.legal_hold,
+            "reason": user.legal_hold_reason,
+            "updated_at": user.legal_hold_updated_at.isoformat() if user.legal_hold_updated_at else None,
+        },
+        description="Updated legal hold status for user",
+    )
+    db.commit()
+
+    return LegalHoldStatusOut(
+        user_id=user.id,
+        legal_hold=user.legal_hold,
+        reason=user.legal_hold_reason,
+        updated_at=user.legal_hold_updated_at,
+    )

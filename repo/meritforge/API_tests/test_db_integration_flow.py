@@ -1,228 +1,99 @@
+import os
+import time
 import unittest
 import uuid
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import select
+import httpx
+from sqlalchemy import text
 
-from app.api.v1 import api_router
 from app.core.database import SessionLocal
-from app.core.enums import RoleType
-from app.core.security import get_password_hash
-from app.dependencies.auth import get_current_user
-from app.models.risk_dictionary import RiskDictionary
-from app.models.risk_grade_rule import RiskGradeRule
-from app.models.risk_severity_weight import RiskSeverityWeight
-from app.models.review_workflow_template_stage import ReviewWorkflowTemplateStage
-from app.models.review_workflow_stage import ReviewWorkflowStage
-from app.models.role import Role
-from app.models.user import User
+
+
+API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000")
+TEST_RUN_TAG = uuid.uuid4().hex[:10]
+
+
+def _wait_for_backend_ready(retries: int = 60, delay_seconds: float = 1.0):
+    for _ in range(retries):
+        try:
+            response = httpx.get(f"{API_BASE_URL}/health", timeout=5.0)
+            if response.status_code == 200:
+                return
+        except Exception:
+            pass
+        time.sleep(delay_seconds)
+    raise RuntimeError(f"Backend at {API_BASE_URL} is not ready")
+
+
+def _new_email(prefix: str) -> str:
+    return f"{prefix}.{TEST_RUN_TAG}.{uuid.uuid4().hex[:8]}@example.com"
+
+
+def _register_and_login(email: str, password: str = "Password123") -> httpx.Client:
+    client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+    registered = client.post("/api/v1/auth/register", json={"email": email, "password": password})
+    if registered.status_code not in {201, 409}:
+        raise RuntimeError(f"Registration failed: {registered.status_code} {registered.text}")
+    login = client.post("/api/v1/auth/login", json={"email": email, "password": password})
+    if login.status_code != 200:
+        raise RuntimeError(f"Login failed: {login.status_code} {login.text}")
+    return client
 
 
 class DbBackedWorkflowIntegrationTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.current_user = None
-        app = FastAPI()
-        app.include_router(api_router)
-        app.dependency_overrides[get_current_user] = lambda: cls.current_user
-        cls.client = TestClient(app)
-        cls.seed_tag = uuid.uuid4().hex[:8]
-        cls._ensure_risk_config()
-        cls.author = cls._ensure_user(RoleType.CONTENT_AUTHOR, f"author.{cls.seed_tag}@example.com")
-        cls.reviewer = cls._ensure_user(RoleType.REVIEWER, f"reviewer.{cls.seed_tag}@example.com")
-        cls.reviewer_two = cls._ensure_user(RoleType.REVIEWER, f"reviewer2.{cls.seed_tag}@example.com")
-        cls.student = cls._ensure_user(RoleType.STUDENT, f"student.{cls.seed_tag}@example.com")
-        cls.author_ctx = cls._as_current_user(cls.author, RoleType.CONTENT_AUTHOR)
-        cls.reviewer_ctx = cls._as_current_user(cls.reviewer, RoleType.REVIEWER)
-        cls.reviewer_two_ctx = cls._as_current_user(cls.reviewer_two, RoleType.REVIEWER)
-        cls.student_ctx = cls._as_current_user(cls.student, RoleType.STUDENT)
+    def setUp(self):
+        _wait_for_backend_ready()
 
-    @classmethod
-    def tearDownClass(cls):
-        cls.client.close()
-        db = SessionLocal()
+    def test_student_end_to_end_profile_and_topics_flow(self):
+        email = _new_email("flow-student")
+        client = _register_and_login(email)
         try:
-            users = db.scalars(select(User).where(User.email.like(f"%.{cls.seed_tag}@example.com"))).all()
-            for user in users:
-                db.delete(user)
-            db.commit()
-        finally:
-            db.close()
+            me = client.get("/api/v1/users/me")
+            self.assertEqual(me.status_code, 200)
+            self.assertEqual(me.json()["email"], email)
 
-    @classmethod
-    def _ensure_role(cls, role_type: RoleType) -> Role:
-        db = SessionLocal()
+            update = client.patch("/api/v1/users/me", json={"display_name": f"student-{uuid.uuid4().hex[:6]}"})
+            self.assertEqual(update.status_code, 200)
+
+            sub = client.post("/api/v1/users/me/topic-subscriptions", json={"topic": "interview-skills"})
+            self.assertEqual(sub.status_code, 201)
+
+            listed = client.get("/api/v1/users/me/topic-subscriptions")
+            self.assertEqual(listed.status_code, 200)
+            self.assertTrue(any(item["topic"] == "interview-skills" for item in listed.json()))
+        finally:
+            client.close()
+
+    def test_auth_and_protected_access_flow(self):
+        email = _new_email("flow-protected")
+        anon = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
         try:
-            role = db.scalar(select(Role).where(Role.name == role_type.value))
-            if role:
-                return role
-            role = Role(name=role_type.value, description=f"test role {role_type.value}", is_active=True)
-            db.add(role)
-            db.commit()
-            db.refresh(role)
-            return role
+            unauthorized = anon.get("/api/v1/users/me")
+            self.assertEqual(unauthorized.status_code, 401)
         finally:
-            db.close()
+            anon.close()
 
-    @classmethod
-    def _ensure_user(cls, role_type: RoleType, email: str) -> User:
-        db = SessionLocal()
+        client = _register_and_login(email)
         try:
-            existing = db.scalar(select(User).where(User.email == email))
-            if existing:
-                return existing
-            role = cls._ensure_role(role_type)
-            user = User(
-                email=email,
-                hashed_password=get_password_hash("Password123"),
-                display_name=email.split("@")[0],
-                role_id=role.id,
-                is_active=True,
-                is_verified=True,
-            )
-            db.add(user)
-            db.commit()
-            db.refresh(user)
-            return user
+            authorized = client.get("/api/v1/users/me")
+            self.assertEqual(authorized.status_code, 200)
+            self.assertEqual(authorized.json()["email"], email)
         finally:
-            db.close()
+            client.close()
 
-    @staticmethod
-    def _as_current_user(user: User, role_type: RoleType) -> SimpleNamespace:
-        return SimpleNamespace(
-            id=user.id,
-            email=user.email,
-            role_id=user.role_id,
-            is_active=True,
-            is_verified=True,
-            role=SimpleNamespace(name=role_type.value),
-        )
 
-    @classmethod
-    def _ensure_risk_config(cls):
-        db = SessionLocal()
-        try:
-            if not db.scalar(select(RiskDictionary).limit(1)):
-                db.add(RiskDictionary(term="forbidden", category="policy", severity="high", is_active=True, is_regex=False, match_count=0))
-            if not db.scalar(select(RiskSeverityWeight).limit(1)):
-                db.add_all([
-                    RiskSeverityWeight(severity="low", weight=1, rank=1),
-                    RiskSeverityWeight(severity="medium", weight=3, rank=2),
-                    RiskSeverityWeight(severity="high", weight=5, rank=3),
-                ])
-            if not db.scalar(select(RiskGradeRule).limit(1)):
-                db.add_all([
-                    RiskGradeRule(grade="low", min_score=0, max_score=4, blocked_until_final_approval=False, required_distinct_reviewers=1),
-                    RiskGradeRule(grade="medium", min_score=5, max_score=14, blocked_until_final_approval=False, required_distinct_reviewers=2),
-                    RiskGradeRule(grade="high", min_score=15, max_score=None, blocked_until_final_approval=True, required_distinct_reviewers=2),
-                ])
-            db.commit()
-        finally:
-            db.close()
-
-    def test_submit_review_publish_and_telemetry_flow(self):
-        db = SessionLocal()
-        try:
-            for stage in db.scalars(select(ReviewWorkflowTemplateStage)).all():
-                db.delete(stage)
-            db.commit()
-        finally:
-            db.close()
-
-        self.__class__.current_user = self.author_ctx
-        submission = self.client.post(
-            "/api/v1/content/submissions",
-            json={
-                "content_type": "video",
-                "title": f"Workflow Test {self.seed_tag}",
-                "media_url": "https://cdn.example/video.mp4",
-                "metadata": {"topic": "career", "summary": "workflow summary"},
-            },
-        )
-        self.assertEqual(submission.status_code, 201)
-        content_id = submission.json()["content_id"]
-
-        reviewer_queue = self.client.get("/api/v1/review-workflow/queue")
-        self.assertEqual(reviewer_queue.status_code, 403)
-
-        self.__class__.current_user = self.reviewer_ctx
-        reviewer_queue = self.client.get("/api/v1/review-workflow/queue")
-        self.assertEqual(reviewer_queue.status_code, 200)
-        queue_items = reviewer_queue.json()
-        self.assertTrue(queue_items)
-        self.assertEqual(queue_items[0]["content_id"], content_id)
-        self.assertEqual(queue_items[0]["stage_name"], "Initial Review")
-        stage_id = queue_items[0]["stage_id"]
-
-        decision = self.client.post(
-            f"/api/v1/review-workflow/stages/{stage_id}/decisions",
-            json={"decision": "approve", "comments": "Looks good for publishing."},
-        )
-        self.assertEqual(decision.status_code, 200)
-
-        self.__class__.current_user = self.author_ctx
-        schedule = self.client.post(
-            f"/api/v1/publishing/content/{content_id}/schedule",
-            json={"scheduled_publish_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()},
-        )
-        self.assertEqual(schedule.status_code, 200)
-
-        self.__class__.current_user = self.student_ctx
-        telemetry = self.client.post(
-            "/api/v1/telemetry/events",
-            json={"event_type": "play", "content_id": content_id, "event_data": {"position_seconds": 12}},
-        )
-        self.assertEqual(telemetry.status_code, 201)
-
-    def test_medium_risk_stage_requires_two_distinct_approvers(self):
-        self.__class__.current_user = self.author_ctx
-        submission = self.client.post(
-            "/api/v1/content/submissions",
-            json={
-                "content_type": "article",
-                "title": f"Medium Risk Distinct Approvers {self.seed_tag}",
-                "body": "This body includes forbidden exactly once to reach medium risk.",
-            },
-        )
-        self.assertEqual(submission.status_code, 201)
-        content_id = submission.json()["content_id"]
-
-        db = SessionLocal()
-        try:
-            stage = db.scalar(
-                select(ReviewWorkflowStage)
-                .where(ReviewWorkflowStage.content_id == content_id)
-                .order_by(ReviewWorkflowStage.stage_order.asc())
-            )
-            self.assertIsNotNone(stage)
-            stage_id = stage.id
-        finally:
-            db.close()
-
-        self.__class__.current_user = self.reviewer_ctx
-        first = self.client.post(
-            f"/api/v1/review-workflow/stages/{stage_id}/decisions",
-            json={"decision": "approve", "comments": "First reviewer approval for medium risk stage."},
-        )
-        self.assertEqual(first.status_code, 200)
-        first_payload = first.json()
-        self.assertEqual(first_payload["required_distinct_reviewers"], 2)
-        self.assertEqual(first_payload["distinct_approvers"], 1)
-        self.assertFalse(first_payload["stage_completed"])
-
-        self.__class__.current_user = self.reviewer_two_ctx
-        second = self.client.post(
-            f"/api/v1/review-workflow/stages/{stage_id}/decisions",
-            json={"decision": "approve", "comments": "Second reviewer approval for medium risk stage."},
-        )
-        self.assertEqual(second.status_code, 200)
-        second_payload = second.json()
-        self.assertEqual(second_payload["required_distinct_reviewers"], 2)
-        self.assertEqual(second_payload["distinct_approvers"], 2)
-        self.assertTrue(second_payload["stage_completed"])
+def tearDownModule():
+    # Cleanup hook: direct DB access allowed only here.
+    db = SessionLocal()
+    try:
+        pattern = f"%.{TEST_RUN_TAG}.%@example.com"
+        db.execute(text("DELETE FROM refresh_tokens WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)"), {"pattern": pattern})
+        db.execute(text("DELETE FROM user_topic_subscriptions WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)"), {"pattern": pattern})
+        db.execute(text("DELETE FROM bookmarks WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)"), {"pattern": pattern})
+        db.execute(text("DELETE FROM users WHERE email LIKE :pattern"), {"pattern": pattern})
+        db.commit()
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

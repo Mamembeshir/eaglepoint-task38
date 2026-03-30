@@ -95,3 +95,15 @@ class DeletionStatusOut(BaseModel):
 class ProcessDeletionResult(BaseModel):
     deleted_count: int
     deleted_user_ids: list[UUID]
+
+
+class LegalHoldUpdateRequest(BaseModel):
+    legal_hold: bool
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class LegalHoldStatusOut(BaseModel):
+    user_id: UUID
+    legal_hold: bool
+    reason: str | None
+    updated_at: datetime | None

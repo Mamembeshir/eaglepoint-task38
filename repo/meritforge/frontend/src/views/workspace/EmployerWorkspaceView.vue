@@ -151,8 +151,21 @@ onMounted(async () => {
             class="rounded-lg border border-border/60 bg-background/60 p-3"
           >
             <div class="mb-2 flex items-center justify-between gap-2">
-              <p class="text-sm font-medium">Applicant: {{ app.applicant_id.slice(0, 8) }}...</p>
+              <p class="text-sm font-medium">Applicant: {{ store.profileDisplayName(app.applicant_id) }}</p>
               <UIBadge variant="secondary" class="capitalize">{{ app.status.replace('_', ' ') }}</UIBadge>
+            </div>
+            <div class="mb-2 text-xs text-muted-foreground">
+              <p v-if="store.applicantProfiles[app.applicant_id]?.email">
+                Email: {{ store.applicantProfiles[app.applicant_id]?.email }}
+              </p>
+              <p v-else>Email hidden by user consent.</p>
+              <p v-if="store.applicantProfiles[app.applicant_id]?.phone_number">
+                Phone: {{ store.applicantProfiles[app.applicant_id]?.phone_number }}
+              </p>
+              <p v-else>Phone hidden by user consent.</p>
+              <p v-if="store.profileErrors[app.applicant_id]" class="text-destructive">
+                {{ store.profileErrors[app.applicant_id] }}
+              </p>
             </div>
             <div class="flex flex-wrap gap-2">
               <UIButton size="sm" variant="outline" @click="store.updateApplicationStatus(app.id, 'under_review')">Under Review</UIButton>

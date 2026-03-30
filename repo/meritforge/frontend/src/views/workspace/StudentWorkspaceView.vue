@@ -12,287 +12,65 @@ import {
   StickyNote,
   Video
 } from 'lucide-vue-next'
-import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import { UIBadge } from '@/components/ui/badge'
 import { UIButton } from '@/components/ui/button'
 import { UICard, UICardContent, UICardDescription, UICardHeader, UICardTitle } from '@/components/ui/card'
 import { UIInput } from '@/components/ui/input'
 import { UITextarea } from '@/components/ui/textarea'
-import { getApiErrorMessage, logDevError } from '@/lib/apiErrors'
-import { useStudentWorkspaceStore } from '@/stores/studentWorkspace'
+import { useStudentWorkspaceView } from '@/composables/workspace/useStudentWorkspaceView'
 
-const workspace = useStudentWorkspaceStore()
-
-const playerEl = ref<HTMLVideoElement | null>(null)
-const activeTab = ref<'videos' | 'bookshelf' | 'milestones'>('videos')
-const contentFilter = ref<'all' | 'video' | 'article' | 'job_announcement'>('all')
-const annotationDraft = ref('')
-const annotationSaving = ref(false)
-const annotationError = ref('')
-const transcriptSelectionHost = ref<HTMLElement | null>(null)
-const selectedStartOffset = ref<number | null>(null)
-const selectedEndOffset = ref<number | null>(null)
-const selectedHighlightedText = ref('')
-const searchQuery = ref('')
-const searchResults = ref<Array<{ id: string; title: string; topic: string; durationSeconds: number; contentType: string }>>([])
-const searching = ref(false)
-const pageError = ref('')
-const videoLoadError = ref('')
-const videoLoading = ref(false)
-const milestoneForm = reactive({
-  applicationId: '',
-  milestoneTemplateId: '',
-  milestoneName: '',
-  progressValue: '1',
-  targetValue: '1',
-  description: ''
-})
-const applyForm = reactive({
-  coverLetter: ''
-})
-const applyLoading = ref(false)
-const applyMessage = ref('')
-let searchDebounceHandle: ReturnType<typeof setTimeout> | null = null
-let lastTelemetryTick = 0
-
-const allTopics = computed(() => [...new Set(workspace.videos.map((video) => video.topic))])
-const filteredContent = computed(() => {
-  if (contentFilter.value === 'all') return workspace.videos
-  return workspace.videos.filter((item) => item.contentType === contentFilter.value)
-})
-const currentContent = computed(() => workspace.currentVideo)
-const currentProgress = computed(() => {
-  const current = currentContent.value
-  if (!current || current.contentType !== 'video') return 0
-  return workspace.progressByVideo[current.id] ?? 0
-})
-
-const currentAnnotations = computed(() => {
-  const current = workspace.currentVideo
-  if (!current) return []
-  return workspace.annotationsByVideo[current.id] ?? []
-})
-
-const completionPercentage = (progressValue: number, targetValue: number) => {
-  if (targetValue <= 0) return 0
-  return Math.min(100, Math.round((progressValue / targetValue) * 100))
-}
-
-async function onVideoPlay() {
-  if (!playerEl.value) return
-  await workspace.trackPlay(Math.floor(playerEl.value.currentTime))
-}
-
-async function onVideoTimeUpdate() {
-  if (!playerEl.value || !workspace.currentVideo) return
-  if (workspace.currentVideo.contentType !== 'video') return
-  const now = Date.now()
-  if (now - lastTelemetryTick < 5000) return
-  lastTelemetryTick = now
-  await workspace.trackPlay(Math.floor(playerEl.value.currentTime))
-}
-
-async function skipVideo() {
-  await workspace.skipCurrentVideo()
-  const currentIndex = workspace.videos.findIndex((v) => v.id === workspace.currentVideoId)
-  const next = workspace.videoItems[(workspace.videoItems.findIndex((v) => v.id === workspace.currentVideoId) + 1) % workspace.videoItems.length]
-  if (next) {
-    workspace.selectVideo(next.id)
-  }
-}
-
-function onVideoSourceChange() {
-  videoLoadError.value = ''
-  videoLoading.value = Boolean(workspace.currentVideo?.streamUrl)
-}
-
-function onVideoLoaded() {
-  videoLoadError.value = ''
-  videoLoading.value = false
-}
-
-function onVideoError() {
-  videoLoading.value = false
-  videoLoadError.value = "This video URL couldn't be loaded (network, CORS, or invalid URL)."
-}
-
-function retryVideoLoad() {
-  if (!playerEl.value) return
-  videoLoadError.value = ''
-  videoLoading.value = true
-  playerEl.value.load()
-}
-
-async function submitMilestoneUpdate() {
-  pageError.value = ''
-  try {
-    await workspace.reportApplicationMilestone({
-      applicationId: milestoneForm.applicationId,
-      milestoneTemplateId: milestoneForm.milestoneTemplateId,
-      milestoneName: milestoneForm.milestoneName,
-      progressValue: Number(milestoneForm.progressValue),
-      targetValue: Number(milestoneForm.targetValue),
-      description: milestoneForm.description || undefined
-    })
-    milestoneForm.milestoneName = ''
-    milestoneForm.description = ''
-  } catch (error) {
-    pageError.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-}
-
-async function applyToSelectedJob() {
-  if (!currentContent.value?.jobPostId) {
-    applyMessage.value = 'This job announcement cannot accept applications from this view yet.'
-    return
-  }
-
-  applyLoading.value = true
-  applyMessage.value = ''
-  try {
-    const application = await workspace.applyToJobPost(currentContent.value.jobPostId, {
-      coverLetter: applyForm.coverLetter || undefined
-    })
-    applyMessage.value = `Application submitted (${application.id.slice(0, 8)}...).`
-    applyForm.coverLetter = ''
-  } catch (error) {
-    applyMessage.value = getApiErrorMessage(error)
-    logDevError(error)
-  } finally {
-    applyLoading.value = false
-  }
-}
-
-async function saveAnnotation() {
-  annotationError.value = ''
-  if (!workspace.currentVideo || !annotationDraft.value.trim()) return
-  if (selectedStartOffset.value === null || selectedEndOffset.value === null || !selectedHighlightedText.value.trim()) {
-    annotationError.value = 'Select text from transcript/content before saving annotation.'
-    return
-  }
-  annotationSaving.value = true
-  try {
-    await workspace.addAnnotation(workspace.currentVideo.id, annotationDraft.value, {
-      startOffset: selectedStartOffset.value,
-      endOffset: selectedEndOffset.value,
-      highlightedText: selectedHighlightedText.value
-    })
-    annotationDraft.value = ''
-    selectedStartOffset.value = null
-    selectedEndOffset.value = null
-    selectedHighlightedText.value = ''
-  } catch (error) {
-    annotationError.value = getApiErrorMessage(error)
-    logDevError(error)
-  } finally {
-    annotationSaving.value = false
-  }
-}
-
-function captureSelectionFromTranscript() {
-  const host = transcriptSelectionHost.value
-  const selection = window.getSelection()
-  if (!host || !selection || selection.rangeCount === 0) {
-    selectedStartOffset.value = null
-    selectedEndOffset.value = null
-    selectedHighlightedText.value = ''
-    return
-  }
-
-  const range = selection.getRangeAt(0)
-  if (!host.contains(range.commonAncestorContainer)) {
-    selectedStartOffset.value = null
-    selectedEndOffset.value = null
-    selectedHighlightedText.value = ''
-    return
-  }
-
-  const highlighted = range.toString()
-  if (!highlighted.trim()) {
-    selectedStartOffset.value = null
-    selectedEndOffset.value = null
-    selectedHighlightedText.value = ''
-    return
-  }
-
-  const preRange = document.createRange()
-  preRange.selectNodeContents(host)
-  preRange.setEnd(range.startContainer, range.startOffset)
-
-  selectedStartOffset.value = preRange.toString().length
-  selectedEndOffset.value = selectedStartOffset.value + highlighted.length
-  selectedHighlightedText.value = highlighted
-}
-
-watch(
+const {
+  workspace,
+  playerEl,
+  activeTab,
+  contentFilter,
+  annotationDraft,
+  annotationSaving,
+  annotationError,
+  transcriptSelectionHost,
+  selectedStartOffset,
+  selectedEndOffset,
+  selectedHighlightedText,
   searchQuery,
-  (value) => {
-    if (searchDebounceHandle) {
-      clearTimeout(searchDebounceHandle)
-    }
-    searchDebounceHandle = setTimeout(async () => {
-      const normalized = value.trim()
-      if (!normalized) {
-        searchResults.value = []
-        return
-      }
-      searching.value = true
-      try {
-        const results = await workspace.searchCatalog(normalized, undefined, 20)
-        searchResults.value = results.map((item) => ({
-          id: item.id,
-          title: item.title,
-          topic: item.topic,
-          durationSeconds: item.durationSeconds,
-          contentType: item.contentType
-        }))
-      } catch (error) {
-        pageError.value = getApiErrorMessage(error)
-        logDevError(error)
-      } finally {
-        searching.value = false
-      }
-    }, 300)
-  }
-)
-
-watch(
-  () => workspace.currentVideoId,
-  async (videoId) => {
-    pageError.value = ''
-    applyMessage.value = ''
-    onVideoSourceChange()
-    try {
-      await workspace.loadAnnotations(videoId)
-    } catch (error) {
-      pageError.value = getApiErrorMessage(error)
-      logDevError(error)
-    }
-    selectedStartOffset.value = null
-    selectedEndOffset.value = null
-    selectedHighlightedText.value = ''
-    const resume = workspace.progressByVideo[videoId] ?? 0
-    if (playerEl.value && resume > 0) {
-      playerEl.value.currentTime = resume
-    }
-  }
-)
-
-onMounted(async () => {
-  pageError.value = ''
-  onVideoSourceChange()
-  try {
-    await workspace.hydrateServerState()
-    if (workspace.currentVideo) {
-      await workspace.loadAnnotations(workspace.currentVideo.id)
-    }
-  } catch (error) {
-    pageError.value = getApiErrorMessage(error)
-    logDevError(error)
-  }
-})
+  searchResults,
+  searching,
+  pageError,
+  videoLoadError,
+  videoLoading,
+  catalogPage,
+  catalogPageCount,
+  pagedFilteredContent,
+  annotationsPage,
+  annotationsPageCount,
+  pagedAnnotations,
+  bookshelfPage,
+  bookshelfPageCount,
+  pagedBookshelf,
+  milestonesPage,
+  milestonesPageCount,
+  pagedMilestones,
+  milestoneForm,
+  applyForm,
+  applyLoading,
+  applyMessage,
+  allTopics,
+  filteredContent,
+  currentContent,
+  currentProgress,
+  currentAnnotations,
+  completionPercentage,
+  onVideoPlay,
+  onVideoTimeUpdate,
+  skipVideo,
+  onVideoLoaded,
+  onVideoError,
+  retryVideoLoad,
+  submitMilestoneUpdate,
+  applyToSelectedJob,
+  saveAnnotation,
+  captureSelectionFromTranscript
+} = useStudentWorkspaceView()
 </script>
 
 <template>
@@ -369,10 +147,11 @@ onMounted(async () => {
             </div>
             <p class="text-sm leading-7 text-foreground/90">{{ currentContent.summary || 'No job summary is available yet.' }}</p>
             <div class="mt-3 space-y-2">
-              <UITextarea v-model="applyForm.coverLetter" :rows="3" placeholder="Optional short cover letter" />
-              <UIButton :disabled="applyLoading || !currentContent?.jobPostId" @click="applyToSelectedJob">
+              <UITextarea v-model="applyForm.coverLetter" :rows="3" placeholder="Tell the employer why you're a strong fit (required)" />
+              <UIButton :disabled="applyLoading || !currentContent?.jobPostId || !applyForm.coverLetter.trim()" @click="applyToSelectedJob">
                 {{ applyLoading ? 'Submitting...' : 'Apply to this job' }}
               </UIButton>
+              <p class="text-xs text-muted-foreground">A cover letter is required to submit an application.</p>
               <p v-if="applyMessage" class="text-xs text-muted-foreground">{{ applyMessage }}</p>
             </div>
           </div>
@@ -473,7 +252,7 @@ onMounted(async () => {
               </div>
             </div>
             <button
-              v-for="item in filteredContent"
+              v-for="item in pagedFilteredContent"
               :key="item.id"
               class="w-full rounded-lg border border-border/50 p-3 text-left transition hover:bg-accent/40"
               :class="item.id === workspace.currentVideoId ? 'bg-primary/10 border-primary/40' : ''"
@@ -491,6 +270,13 @@ onMounted(async () => {
                 <UIBadge variant="outline" class="capitalize">{{ item.topic }}</UIBadge>
               </div>
             </button>
+            <div v-if="filteredContent.length > 8" class="mt-2 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>Showing page {{ catalogPage }} of {{ catalogPageCount }}</span>
+              <div class="flex gap-2">
+                <UIButton size="sm" variant="outline" :disabled="catalogPage <= 1" @click="catalogPage = Math.max(1, catalogPage - 1)">Previous page</UIButton>
+                <UIButton size="sm" variant="outline" :disabled="catalogPage >= catalogPageCount" @click="catalogPage = Math.min(catalogPageCount, catalogPage + 1)">Next page</UIButton>
+              </div>
+            </div>
             <p v-if="!filteredContent.length" class="text-xs text-muted-foreground">No content matches this filter yet.</p>
           </UICardContent>
         </UICard>
@@ -560,7 +346,7 @@ onMounted(async () => {
 
             <div class="space-y-2">
               <div
-                v-for="annotation in currentAnnotations"
+                v-for="annotation in pagedAnnotations"
                 :key="annotation.id"
                 class="rounded-lg border border-border/60 bg-background/50 p-3"
               >
@@ -569,6 +355,13 @@ onMounted(async () => {
                   <span>{{ new Date(annotation.updated_at).toLocaleString() }}</span>
                 </div>
                 <p class="text-sm">{{ annotation.annotation_text }}</p>
+              </div>
+              <div v-if="currentAnnotations.length > 5" class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>Showing page {{ annotationsPage }} of {{ annotationsPageCount }}</span>
+                <div class="flex gap-2">
+                  <UIButton size="sm" variant="outline" :disabled="annotationsPage <= 1" @click="annotationsPage = Math.max(1, annotationsPage - 1)">Previous page</UIButton>
+                  <UIButton size="sm" variant="outline" :disabled="annotationsPage >= annotationsPageCount" @click="annotationsPage = Math.min(annotationsPageCount, annotationsPage + 1)">Next page</UIButton>
+                </div>
               </div>
               <p v-if="!currentAnnotations.length" class="text-xs text-muted-foreground">No annotations yet for this video.</p>
             </div>
@@ -586,7 +379,7 @@ onMounted(async () => {
         <UICardContent>
           <div v-if="workspace.privateBookshelf.length" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <UICard
-              v-for="video in workspace.privateBookshelf"
+              v-for="video in pagedBookshelf"
               :key="video.id"
               class="border-border/60 bg-background/70 transition hover:-translate-y-0.5"
             >
@@ -599,6 +392,13 @@ onMounted(async () => {
                 <UIButton variant="ghost" size="sm" @click="workspace.selectVideo(video.id); activeTab = 'videos'">Open</UIButton>
               </UICardContent>
             </UICard>
+          </div>
+          <div v-if="workspace.privateBookshelf.length > 6" class="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Showing page {{ bookshelfPage }} of {{ bookshelfPageCount }}</span>
+            <div class="flex gap-2">
+              <UIButton size="sm" variant="outline" :disabled="bookshelfPage <= 1" @click="bookshelfPage = Math.max(1, bookshelfPage - 1)">Previous page</UIButton>
+              <UIButton size="sm" variant="outline" :disabled="bookshelfPage >= bookshelfPageCount" @click="bookshelfPage = Math.min(bookshelfPageCount, bookshelfPage + 1)">Next page</UIButton>
+            </div>
           </div>
           <div v-else class="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">
              No saved content yet. Bookmark items from the catalog to build your bookshelf.
@@ -620,7 +420,10 @@ onMounted(async () => {
               {{ application.id.slice(0, 8) }}... • {{ application.status.replace('_', ' ') }}
             </option>
           </select>
-          <UIInput v-model="milestoneForm.milestoneTemplateId" placeholder="Milestone template ID" />
+          <div>
+            <UIInput v-model="milestoneForm.milestoneTemplateId" placeholder="Milestone template ID (UUID)" />
+            <p class="mt-1 text-xs text-muted-foreground">Use the full UUID format, not a short code.</p>
+          </div>
           <UIInput v-model="milestoneForm.milestoneName" placeholder="Milestone name" class="md:col-span-2" />
           <UIInput v-model="milestoneForm.progressValue" type="number" placeholder="Progress value" />
           <UIInput v-model="milestoneForm.targetValue" type="number" placeholder="Target value" />
@@ -638,7 +441,7 @@ onMounted(async () => {
         </UICardHeader>
         <UICardContent class="space-y-3">
           <div
-            v-for="milestone in workspace.milestones"
+            v-for="milestone in pagedMilestones"
             :key="milestone.id"
             class="rounded-lg border border-border/60 bg-background/60 p-4"
           >
@@ -657,6 +460,13 @@ onMounted(async () => {
             <div class="mt-2 flex items-center justify-between text-xs text-muted-foreground">
               <span class="capitalize">{{ milestone.source }} update</span>
               <span>{{ new Date(milestone.updated_at).toLocaleString() }}</span>
+            </div>
+          </div>
+          <div v-if="workspace.milestones.length > 6" class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Showing page {{ milestonesPage }} of {{ milestonesPageCount }}</span>
+            <div class="flex gap-2">
+              <UIButton size="sm" variant="outline" :disabled="milestonesPage <= 1" @click="milestonesPage = Math.max(1, milestonesPage - 1)">Previous page</UIButton>
+              <UIButton size="sm" variant="outline" :disabled="milestonesPage >= milestonesPageCount" @click="milestonesPage = Math.min(milestonesPageCount, milestonesPage + 1)">Next page</UIButton>
             </div>
           </div>
           <div v-if="!workspace.milestones.length" class="rounded-xl border border-dashed border-border/70 p-8 text-center text-sm text-muted-foreground">

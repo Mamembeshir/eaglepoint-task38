@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import String, cast, or_, select
@@ -12,7 +13,6 @@ from app.dependencies.auth import get_current_user
 from app.models.content import Content
 from app.models.content_version import ContentVersion
 from app.models.content_risk_assessment import ContentRiskAssessment
-from app.models.content_version import ContentVersion
 from app.models.risk_dictionary import RiskDictionary
 from app.models.risk_grade_rule import RiskGradeRule
 from app.models.risk_severity_weight import RiskSeverityWeight
@@ -21,6 +21,8 @@ from app.models.review_workflow_stage import ReviewWorkflowStage
 from app.models.user import User
 from app.schemas.content_submission import (
     ContentCatalogItemOut,
+    ContentRevisionOut,
+    ContentRevisionRequest,
     ContentSubmissionListItemOut,
     ContentSubmissionOut,
     ContentSubmissionRequest,
@@ -29,6 +31,7 @@ from app.schemas.content_submission import (
     TriggeredWordOut,
 )
 from app.services.review_workflow_service import ensure_content_review_workflow
+from app.services.content_revision_service import ContentRevisionService
 from app.services.publishing_service import is_user_in_canary
 
 router = APIRouter(tags=["Content Submission"])
@@ -378,3 +381,60 @@ def list_my_submissions(
         )
 
     return results
+
+
+@router.post("/content/{content_id}/revisions", response_model=ContentRevisionOut, status_code=status.HTTP_201_CREATED)
+def submit_content_revision(
+    content_id: UUID,
+    payload: ContentRevisionRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ContentRevisionOut:
+    content = db.scalar(select(Content).where(Content.id == content_id))
+    if not content:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Content not found")
+
+    if content.author_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the content owner can submit a revision")
+
+    try:
+        version, stages_created = ContentRevisionService.create_revision(
+            db,
+            content=content,
+            actor_id=current_user.id,
+            title=payload.title,
+            body=payload.body,
+            media_url=payload.media_url,
+            metadata=payload.metadata,
+            change_summary=payload.change_summary,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    write_audit_log(
+        db,
+        action=AuditAction.CREATE,
+        entity_type="content_revision",
+        entity_id=str(version.id),
+        actor=current_user,
+        request=request,
+        after_data={
+            "content_id": str(content.id),
+            "version_number": version.version_number,
+            "status": content.status.value,
+            "stages_created": stages_created,
+        },
+        description="Submitted revised content version after needs_revision",
+    )
+
+    db.commit()
+
+    return ContentRevisionOut(
+        content_id=content.id,
+        version_id=version.id,
+        version_number=version.version_number,
+        status=content.status,
+        stages_created=stages_created,
+        created_at=version.created_at,
+    )
