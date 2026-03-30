@@ -4,6 +4,10 @@ from sqlalchemy import select
 
 from app.core.database import SessionLocal
 from app.core.enums import RoleType
+from app.models.review_workflow_template_stage import ReviewWorkflowTemplateStage
+from app.models.risk_dictionary import RiskDictionary
+from app.models.risk_grade_rule import RiskGradeRule
+from app.models.risk_severity_weight import RiskSeverityWeight
 from app.core.security import get_password_hash
 from app.models.role import Role
 from app.models.user import User
@@ -14,7 +18,9 @@ SEED_ACCOUNTS = [
     ("employer.meritforge@gmail.com", RoleType.EMPLOYER_MANAGER, "Employer Manager"),
     ("employer2.meritforge@gmail.com", RoleType.EMPLOYER_MANAGER, "Employer Manager Two"),
     ("author.meritforge@gmail.com", RoleType.CONTENT_AUTHOR, "Content Author"),
+    ("author2.meritforge@gmail.com", RoleType.CONTENT_AUTHOR, "Content Author Two"),
     ("reviewer.meritforge@gmail.com", RoleType.REVIEWER, "Reviewer"),
+    ("reviewer2.meritforge@gmail.com", RoleType.REVIEWER, "Reviewer Two"),
     ("admin.meritforge@gmail.com", RoleType.SYSTEM_ADMINISTRATOR, "System Administrator"),
 ]
 
@@ -23,7 +29,9 @@ LEGACY_SEED_EMAILS = {
     "employer@meritforge.local",
     "employer2@meritforge.local",
     "author@meritforge.local",
+    "author2@meritforge.local",
     "reviewer@meritforge.local",
+    "reviewer2@meritforge.local",
     "admin@meritforge.local",
 }
 
@@ -72,6 +80,44 @@ def main() -> None:
             )
             db.add(user)
             created += 1
+
+        if not db.scalar(select(RiskSeverityWeight).limit(1)):
+            db.add_all(
+                [
+                    RiskSeverityWeight(severity="low", weight=1, rank=1),
+                    RiskSeverityWeight(severity="medium", weight=3, rank=2),
+                    RiskSeverityWeight(severity="high", weight=5, rank=3),
+                ]
+            )
+
+        if not db.scalar(select(RiskGradeRule).limit(1)):
+            db.add_all(
+                [
+                    RiskGradeRule(grade="low", min_score=0, max_score=4, blocked_until_final_approval=False, required_distinct_reviewers=1),
+                    RiskGradeRule(grade="medium", min_score=5, max_score=14, blocked_until_final_approval=False, required_distinct_reviewers=2),
+                    RiskGradeRule(grade="high", min_score=15, max_score=None, blocked_until_final_approval=True, required_distinct_reviewers=2),
+                ]
+            )
+
+        if not db.scalar(select(RiskDictionary).where(RiskDictionary.term == "forbidden")):
+            db.add(
+                RiskDictionary(
+                    term="forbidden",
+                    category="policy",
+                    severity="high",
+                    description="Seeded keyword for risk scoring tests",
+                    is_active=True,
+                    is_regex=False,
+                )
+            )
+
+        if not db.scalar(select(ReviewWorkflowTemplateStage).limit(1)):
+            db.add_all(
+                [
+                    ReviewWorkflowTemplateStage(stage_name="Initial Review", stage_order=1, description="Seeded initial review", is_required=True, is_parallel=False, is_active=True),
+                    ReviewWorkflowTemplateStage(stage_name="Final Review", stage_order=2, description="Seeded final review", is_required=True, is_parallel=False, is_active=True),
+                ]
+            )
 
         db.commit()
         print(f"Seed completed. removed_legacy={removed_legacy}, created={created}, skipped={skipped}")

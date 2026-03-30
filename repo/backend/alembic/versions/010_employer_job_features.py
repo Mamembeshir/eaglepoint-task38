@@ -1,7 +1,7 @@
 """Add employer job management and notifications data structures
 
 Revision ID: 010_employer_job_features
-Revises: 009_engagement_progress_annotations
+Revises: 009_engagement_annotations
 Create Date: 2024-01-10 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision: str = "010_employer_job_features"
-down_revision: Union[str, None] = "009_engagement_progress_annotations"
+down_revision: Union[str, None] = "009_engagement_annotations"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

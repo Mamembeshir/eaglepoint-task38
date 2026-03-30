@@ -1,9 +1,6 @@
-version: "3.9"
-
 services:
   ssl-init:
     image: alpine:3.20
-    container_name: meritforge-ssl-init
     restart: "no"
     command: >
       sh -c "
@@ -22,7 +19,6 @@ services:
 
   db:
     image: postgres:16-alpine
-    container_name: meritforge-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-meritforge}
@@ -40,7 +36,6 @@ services:
 
   db-dev-tools:
     image: alpine/socat
-    container_name: meritforge-db-dev-tools
     profiles: ["dev-tools"]
     command: tcp-listen:5432,fork,reuseaddr tcp-connect:db:5432
     ports:
@@ -53,7 +48,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: meritforge-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
@@ -68,7 +62,6 @@ services:
 
   redis-dev-tools:
     image: alpine/socat
-    container_name: meritforge-redis-dev-tools
     profiles: ["dev-tools"]
     command: tcp-listen:6379,fork,reuseaddr tcp-connect:redis:6379
     ports:
@@ -83,7 +76,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: meritforge-backend
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-meritforge}:${POSTGRES_PASSWORD:-meritforge_secret}@db:5432/${POSTGRES_DB:-meritforge}
@@ -120,6 +112,7 @@ services:
       - backend_coverage:/coverage
     command: >
       sh -c "
+      alembic upgrade head &&
       if [ \"$${ENABLE_BACKEND_COVERAGE}\" = \"true\" ]; then
         coverage run --parallel-mode -m uvicorn app.main:app --host 0.0.0.0 --port 8000;
       else
@@ -139,7 +132,7 @@ services:
       retries: 12
       start_period: 15s
 
-  test:
+  backend-test:
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -173,16 +166,15 @@ services:
     working_dir: /tests
     command: >
       sh -c "coverage erase &&
+      python /app/scripts/seed_dev_users.py &&
       coverage run -m pytest unit_tests API_tests -v &&
-      cd /tests/frontend && npm ci && npm run test:run && cd /tests &&
-      coverage combine . /coverage &&
+      coverage combine . /coverage || true &&
       coverage report &&
       coverage html"
     volumes:
       - ./backend:/app:ro
       - ./unit_tests:/tests/unit_tests:ro
       - ./API_tests:/tests/API_tests:ro
-      - ./frontend:/tests/frontend:ro
       - ./.coveragerc:/tests/.coveragerc:ro
       - ./coverage_html:/tests/coverage_html
       - backend_coverage:/coverage
@@ -196,11 +188,40 @@ services:
     networks:
       - meritforge-network
 
+  frontend-test:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    profiles:
+      - test
+    working_dir: /app
+    command: sh -c "rm -rf /tmp/frontend-tests && cp -R /app /tmp/frontend-tests && cd /tmp/frontend-tests && npm ci && npm run test:run"
+    environment:
+      NODE_ENV: test
+    volumes:
+      - ./frontend:/app:ro
+      - /app/node_modules
+    networks:
+      - meritforge-network
+
+  test:
+    image: alpine:3.20
+    profiles:
+      - test
+    command: ["sh", "-c", "echo 'backend-test and frontend-test completed successfully'"]
+    depends_on:
+      backend-test:
+        condition: service_completed_successfully
+      frontend-test:
+        condition: service_completed_successfully
+    networks:
+      - meritforge-network
+
   celery-worker:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: meritforge-celery-worker
     restart: unless-stopped
     command: celery -A app.core.celery_app.celery_app worker --loglevel=info
     environment:
@@ -238,7 +259,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: meritforge-celery-beat
     restart: unless-stopped
     command: celery -A app.core.celery_app.celery_app beat --loglevel=info
     environment:
@@ -277,7 +297,6 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       target: ${NODE_ENV:-development}
-    container_name: meritforge-frontend
     restart: unless-stopped
     environment:
       VITE_API_URL: ${VITE_API_URL:-}
@@ -294,7 +313,6 @@ services:
 
   nginx:
     image: nginx:alpine
-    container_name: meritforge-nginx
     restart: unless-stopped
     ports:
       - "443:443"

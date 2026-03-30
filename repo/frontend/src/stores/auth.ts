@@ -5,10 +5,29 @@ import { api } from '@/lib/api'
 import { getProfileBackupKey } from '@/lib/profileBackup'
 import type { AppRole, AuthResponse, AuthUser, LoginPayload, RegisterPayload } from '@/types/auth'
 
+const AUTH_USER_STORAGE_KEY = 'meritforge.auth.user'
+
+function readStoredUser(): AuthUser | null {
+  try {
+    const raw = localStorage.getItem(AUTH_USER_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as AuthUser) : null
+  } catch {
+    return null
+  }
+}
+
+function writeStoredUser(user: AuthUser | null) {
+  if (!user) {
+    localStorage.removeItem(AUTH_USER_STORAGE_KEY)
+    return
+  }
+  localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(user))
+}
+
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref<AuthUser | null>(null)
+  const user = ref<AuthUser | null>(readStoredUser())
   const loading = ref(false)
-  const initialized = ref(false)
+  const initialized = ref(Boolean(user.value))
 
   const isAuthenticated = computed(() => Boolean(user.value))
   const role = computed<AppRole | null>(() => user.value?.role ?? null)
@@ -18,6 +37,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const { data } = await api.post<AuthResponse>('/api/v1/auth/login', payload)
       user.value = data.user
+      writeStoredUser(data.user)
       return data
     } finally {
       loading.value = false
@@ -32,6 +52,7 @@ export const useAuthStore = defineStore('auth', () => {
         password: payload.password
       })
       user.value = data.user
+      writeStoredUser(data.user)
       return data
     } finally {
       loading.value = false
@@ -48,6 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
         localStorage.removeItem(getProfileBackupKey(currentUserId))
       }
       user.value = null
+      writeStoredUser(null)
       loading.value = false
     }
   }
@@ -57,8 +79,10 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const { data } = await api.get<AuthUser>('/api/v1/users/me')
       user.value = data
+      writeStoredUser(data)
     } catch {
       user.value = null
+      writeStoredUser(null)
     } finally {
       initialized.value = true
     }

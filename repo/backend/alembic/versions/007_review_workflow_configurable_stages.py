@@ -1,6 +1,6 @@
 """Add configurable review workflow stages and needs_revision status
 
-Revision ID: 007_review_workflow_configurable_stages
+Revision ID: 007_review_workflow_stages
 Revises: 006_content_risk_scoring
 Create Date: 2024-01-07 00:00:00.000000
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "007_review_workflow_configurable_stages"
+revision: str = "007_review_workflow_stages"
 down_revision: Union[str, None] = "006_content_risk_scoring"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

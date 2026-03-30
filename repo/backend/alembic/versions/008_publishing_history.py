@@ -1,7 +1,7 @@
 """Add publishing history table
 
 Revision ID: 008_publishing_history
-Revises: 007_review_workflow_configurable_stages
+Revises: 007_review_workflow_stages
 Create Date: 2024-01-08 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision: str = "008_publishing_history"
-down_revision: Union[str, None] = "007_review_workflow_configurable_stages"
+down_revision: Union[str, None] = "007_review_workflow_stages"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

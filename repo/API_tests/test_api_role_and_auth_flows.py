@@ -187,6 +187,42 @@ class E2ESeededRoleFlowsTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_admin_audit_log_shows_before_after_and_changes_for_profile_update(self):
+        user_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        admin_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        try:
+            email = _new_email("audit-user")
+            _register(user_client, email, display_name="Audit Before")
+            _login(user_client, email)
+            _login_seeded(admin_client, "admin.meritforge@gmail.com")
+
+            updated = user_client.patch(
+                "/api/v1/users/me",
+                json={"display_name": "Audit After", "bio": "Updated via audit test"},
+            )
+            self.assertEqual(updated.status_code, 200)
+
+            logs = admin_client.get(
+                "/api/v1/audit-logs",
+                params={"user_email": email, "entity_type": "user_profile", "action": "update", "limit": 10},
+            )
+            self.assertEqual(logs.status_code, 200)
+            items = logs.json()["items"]
+            self.assertTrue(items)
+            entry = items[0]
+            self.assertEqual(entry["entity_type"], "user_profile")
+            self.assertEqual(entry["request_method"], "PATCH")
+            self.assertEqual(entry["before_data"]["display_name"], "Audit Before")
+            self.assertEqual(entry["after_data"]["display_name"], "Audit After")
+            self.assertEqual(entry["changes"]["display_name"], "Audit After")
+            self.assertEqual(entry["changes"]["bio"], "Updated via audit test")
+            self.assertNotIn("password", str(entry["before_data"]).lower())
+            self.assertNotIn("password", str(entry["after_data"]).lower())
+            self.assertNotIn("password", str(entry["changes"]).lower())
+        finally:
+            user_client.close()
+            admin_client.close()
+
     def test_admin_webhook_config_and_delivery_listing(self):
         client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
         try:
@@ -209,6 +245,28 @@ class E2ESeededRoleFlowsTests(unittest.TestCase):
             deliveries = client.get("/api/v1/webhooks/deliveries")
             self.assertEqual(deliveries.status_code, 200)
             self.assertIsInstance(deliveries.json(), list)
+        finally:
+            client.close()
+
+    def test_admin_operations_metrics_and_export_csv(self):
+        client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        try:
+            _login_seeded(client, "admin.meritforge@gmail.com")
+
+            metrics = client.get(
+                "/api/v1/operations/metrics",
+                params={"start_date": "2026-01-01", "end_date": "2026-01-02"},
+            )
+            self.assertEqual(metrics.status_code, 200)
+            self.assertIn("retention", metrics.json())
+
+            export_csv = client.get(
+                "/api/v1/operations/metrics/export.csv",
+                params={"start_date": "2026-01-01", "end_date": "2026-01-02"},
+            )
+            self.assertEqual(export_csv.status_code, 200)
+            self.assertIn("metric_date", export_csv.text)
+            self.assertTrue(len(export_csv.text.strip()) > 0)
         finally:
             client.close()
 
@@ -289,6 +347,37 @@ class E2ESeededRoleFlowsTests(unittest.TestCase):
             author_client.close()
             reviewer_client.close()
 
+    def test_content_revision_owner_isolation(self):
+        owner_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        other_author_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        try:
+            _login_seeded(owner_client, "author.meritforge@gmail.com")
+            _login_seeded(other_author_client, "author2.meritforge@gmail.com")
+
+            created = owner_client.post(
+                "/api/v1/content/submissions",
+                json={
+                    "content_type": "article",
+                    "title": f"Author Ownership {TEST_RUN_TAG}",
+                    "body": "Owner-created content for revision authorization coverage.",
+                },
+            )
+            self.assertEqual(created.status_code, 201)
+            content_id = created.json()["content_id"]
+
+            forbidden = other_author_client.post(
+                f"/api/v1/content/{content_id}/revisions",
+                json={
+                    "title": f"Unauthorized Revision {TEST_RUN_TAG}",
+                    "body": "Another author should not be able to revise this content.",
+                    "change_summary": "unauthorized revision",
+                },
+            )
+            self.assertEqual(forbidden.status_code, 403)
+        finally:
+            owner_client.close()
+            other_author_client.close()
+
     def test_reviewer_short_return_for_revision_validation(self):
         author_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
         reviewer_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
@@ -319,6 +408,81 @@ class E2ESeededRoleFlowsTests(unittest.TestCase):
         finally:
             author_client.close()
             reviewer_client.close()
+
+    def test_medium_risk_content_requires_two_distinct_approvers(self):
+        author_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        reviewer_one_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        reviewer_two_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        try:
+            _login_seeded(author_client, "author.meritforge@gmail.com")
+            _login_seeded(reviewer_one_client, "reviewer.meritforge@gmail.com")
+            _login_seeded(reviewer_two_client, "reviewer2.meritforge@gmail.com")
+
+            created = author_client.post(
+                "/api/v1/content/submissions",
+                json={
+                    "content_type": "article",
+                    "title": f"Medium Risk {TEST_RUN_TAG}",
+                    "body": "This draft contains forbidden language once so medium risk review rules apply.",
+                },
+            )
+            self.assertEqual(created.status_code, 201)
+            self.assertEqual(created.json()["required_distinct_reviewers"], 2)
+            content_id = created.json()["content_id"]
+
+            queue = reviewer_one_client.get("/api/v1/review-workflow/queue")
+            self.assertEqual(queue.status_code, 200)
+            stage = next(item for item in queue.json() if item["content_id"] == content_id)
+
+            first = reviewer_one_client.post(
+                f"/api/v1/review-workflow/stages/{stage['stage_id']}/decisions",
+                json={"decision": "approve", "comments": "First reviewer approval for medium risk content."},
+            )
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["required_distinct_reviewers"], 2)
+            self.assertEqual(first.json()["distinct_approvers"], 1)
+            self.assertFalse(first.json()["stage_completed"])
+
+            second = reviewer_two_client.post(
+                f"/api/v1/review-workflow/stages/{stage['stage_id']}/decisions",
+                json={"decision": "approve", "comments": "Second reviewer approval for medium risk content."},
+            )
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual(second.json()["required_distinct_reviewers"], 2)
+            self.assertEqual(second.json()["distinct_approvers"], 2)
+            self.assertTrue(second.json()["stage_completed"])
+        finally:
+            author_client.close()
+            reviewer_one_client.close()
+            reviewer_two_client.close()
+
+    def test_high_risk_content_cannot_be_scheduled_without_final_approval(self):
+        author_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        admin_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        try:
+            _login_seeded(author_client, "author.meritforge@gmail.com")
+            _login_seeded(admin_client, "admin.meritforge@gmail.com")
+
+            created = author_client.post(
+                "/api/v1/content/submissions",
+                json={
+                    "content_type": "article",
+                    "title": f"High Risk {TEST_RUN_TAG}",
+                    "body": "forbidden forbidden forbidden forbidden",
+                },
+            )
+            self.assertEqual(created.status_code, 201)
+            self.assertTrue(created.json()["blocked_until_final_approval"])
+            content_id = created.json()["content_id"]
+
+            scheduled = admin_client.post(
+                f"/api/v1/publishing/content/{content_id}/schedule",
+                json={"scheduled_publish_at": "2030-01-01T00:00:00Z"},
+            )
+            self.assertEqual(scheduled.status_code, 422)
+        finally:
+            author_client.close()
+            admin_client.close()
 
     def test_employer_job_creation_and_cross_user_isolation(self):
         owner_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
@@ -352,16 +516,112 @@ class E2ESeededRoleFlowsTests(unittest.TestCase):
             owner_client.close()
             other_client.close()
 
+    def test_annotation_patch_owner_isolation(self):
+        author_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        owner_student_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        other_student_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        try:
+            _login_seeded(author_client, "author.meritforge@gmail.com")
+            owner_email = _new_email("annotation-owner")
+            other_email = _new_email("annotation-other")
+            _register(owner_student_client, owner_email, display_name="Annotation Owner")
+            _register(other_student_client, other_email, display_name="Annotation Other")
+            _login(owner_student_client, owner_email)
+            _login(other_student_client, other_email)
+
+            created = author_client.post(
+                "/api/v1/content/submissions",
+                json={
+                    "content_type": "article",
+                    "title": f"Annotation Content {TEST_RUN_TAG}",
+                    "body": "This article body is used for annotation ownership coverage.",
+                },
+            )
+            self.assertEqual(created.status_code, 201)
+            content_id = created.json()["content_id"]
+
+            annotation = owner_student_client.post(
+                "/api/v1/annotations",
+                json={
+                    "content_id": content_id,
+                    "start_offset": 0,
+                    "end_offset": 4,
+                    "highlighted_text": "This",
+                    "annotation_text": "Owner note",
+                },
+            )
+            self.assertEqual(annotation.status_code, 201)
+            annotation_id = annotation.json()["id"]
+
+            forbidden = other_student_client.patch(
+                f"/api/v1/annotations/{annotation_id}",
+                json={
+                    "annotation_text": "Unauthorized update",
+                    "client_updated_at": "2030-01-01T00:00:00Z",
+                },
+            )
+            self.assertEqual(forbidden.status_code, 403)
+        finally:
+            author_client.close()
+            owner_student_client.close()
+            other_student_client.close()
+
+    def test_takedown_requires_step_up_and_respects_content_ownership(self):
+        owner_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        other_author_client = httpx.Client(base_url=API_BASE_URL, follow_redirects=True)
+        try:
+            _login_seeded(owner_client, "author.meritforge@gmail.com")
+            _login_seeded(other_author_client, "author2.meritforge@gmail.com")
+
+            created = owner_client.post(
+                "/api/v1/content/submissions",
+                json={
+                    "content_type": "article",
+                    "title": f"Takedown Content {TEST_RUN_TAG}",
+                    "body": "Content used for takedown authorization coverage.",
+                },
+            )
+            self.assertEqual(created.status_code, 201)
+            content_id = created.json()["content_id"]
+
+            no_step_up = owner_client.post(
+                f"/api/v1/publishing/content/{content_id}/takedown",
+                json={"reason": "policy review"},
+            )
+            self.assertEqual(no_step_up.status_code, 403)
+
+            step_up = other_author_client.post(
+                "/api/v1/auth/step-up",
+                json={"password": os.getenv("SEED_DEV_PASSWORD", "MeritForgeDev!2026")},
+            )
+            self.assertEqual(step_up.status_code, 200)
+
+            foreign = other_author_client.post(
+                f"/api/v1/publishing/content/{content_id}/takedown",
+                json={"reason": "unauthorized takedown"},
+            )
+            self.assertEqual(foreign.status_code, 403)
+        finally:
+            owner_client.close()
+            other_author_client.close()
+
 
 def tearDownModule():
     db = SessionLocal()
     try:
         pattern = f"%{TEST_RUN_TAG}%"
-        db.execute(text("DELETE FROM refresh_tokens WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)"), {"pattern": pattern})
-        db.execute(text("DELETE FROM user_topic_subscriptions WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)"), {"pattern": pattern})
-        db.execute(text("DELETE FROM bookmarks WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)"), {"pattern": pattern})
-        db.execute(text("DELETE FROM annotations WHERE author_id IN (SELECT id FROM users WHERE email LIKE :pattern)"), {"pattern": pattern})
-        db.execute(text("DELETE FROM users WHERE email LIKE :pattern"), {"pattern": pattern})
+        cleanup_statements = [
+            ("DELETE FROM refresh_tokens WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)", {"pattern": pattern}),
+            ("DELETE FROM user_topic_subscriptions WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)", {"pattern": pattern}),
+            ("DELETE FROM bookmarks WHERE user_id IN (SELECT id FROM users WHERE email LIKE :pattern)", {"pattern": pattern}),
+            ("DELETE FROM annotations WHERE author_id IN (SELECT id FROM users WHERE email LIKE :pattern)", {"pattern": pattern}),
+            ("DELETE FROM users WHERE email LIKE :pattern", {"pattern": pattern}),
+        ]
+        for sql, params in cleanup_statements:
+            try:
+                db.execute(text(sql), params)
+            except Exception:
+                continue
         db.commit()
     finally:
         db.close()

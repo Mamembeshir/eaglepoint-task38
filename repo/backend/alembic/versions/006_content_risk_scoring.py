@@ -1,7 +1,7 @@
 """Add content risk scoring configuration and assessments
 
 Revision ID: 006_content_risk_scoring
-Revises: 005_user_privacy_and_cohort_controls
+Revises: 005_user_privacy_cohort
 Create Date: 2024-01-06 00:00:00.000000
 
 """
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision: str = "006_content_risk_scoring"
-down_revision: Union[str, None] = "005_user_privacy_and_cohort_controls"
+down_revision: Union[str, None] = "005_user_privacy_cohort"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

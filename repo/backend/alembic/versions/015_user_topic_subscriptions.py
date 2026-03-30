@@ -1,7 +1,7 @@
 """Add user topic subscriptions table
 
 Revision ID: 015_user_topic_subscriptions
-Revises: 014_security_privacy_encryption_updates
+Revises: 014_security_privacy_updates
 Create Date: 2024-01-15 00:00:00.000000
 
 """
@@ -14,7 +14,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision: str = "015_user_topic_subscriptions"
-down_revision: Union[str, None] = "014_security_privacy_encryption_updates"
+down_revision: Union[str, None] = "014_security_privacy_updates"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

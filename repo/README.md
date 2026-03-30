@@ -4,7 +4,7 @@ Minimal runbook for local development and testing.
 
 ## Run (Docker)
 
-From `repo/meritforge`:
+From `repo`:
 
 ```bash
 docker compose up --build
@@ -42,22 +42,22 @@ Show logs:
 docker compose logs -f
 ```
 
-Run backend tests (pytest + coverage):
+Run all tests (backend + frontend):
 
 ```bash
-docker compose --profile test run --rm test
+docker compose --profile test up --build --abort-on-container-exit --exit-code-from test test
 ```
 
 Run only API tests:
 
 ```bash
-docker compose --profile test run --rm test python -m pytest API_tests -q
+docker compose --profile test run --rm backend-test python -m pytest API_tests -q
 ```
 
 Run frontend tests:
 
 ```bash
-docker compose exec frontend npm run test:run
+docker compose --profile test run --rm frontend-test npm run test:run
 ```
 
 ## Credentials

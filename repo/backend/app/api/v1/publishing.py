@@ -120,15 +120,15 @@ def schedule_publishing(
     if payload.scheduled_unpublish_at and payload.scheduled_unpublish_at <= payload.scheduled_publish_at:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="scheduled_unpublish_at must be after scheduled_publish_at")
 
-    if content.is_locked:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Locked content cannot be scheduled")
-
     risk_assessment = db.scalar(select(ContentRiskAssessment).where(ContentRiskAssessment.content_id == content.id))
     if risk_assessment and risk_assessment.blocked_until_final_approval and not _has_final_stage_approval(db, content.id):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Content is blocked until final-stage approval is recorded",
         )
+
+    if content.is_locked:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Locked content cannot be scheduled")
 
     schedule = db.scalar(select(PublishingSchedule).where(PublishingSchedule.content_id == content.id))
     before_schedule = None

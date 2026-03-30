@@ -2,15 +2,21 @@ import os
 import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 import httpx
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.core.config import settings
+from app.core.idempotency import IdempotencyMiddleware
 
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://backend:8000")
 TEST_RUN_TAG = uuid.uuid4().hex[:10]
 
 
-def _wait_for_backend_ready(retries: int = 30, delay_seconds: float = 1.0):
+def _wait_for_backend_ready(retries: int = 60, delay_seconds: float = 1.0):
     for _ in range(retries):
         try:
             response = httpx.get(f"{API_BASE_URL}/health", timeout=5.0)
@@ -84,6 +90,37 @@ class IdempotencyMiddlewareApiTests(unittest.TestCase):
         )
         self.assertIn(response.status_code, {200, 401})
         self.assertNotEqual(response.status_code, 500)
+
+
+class _FailingAsyncRedis:
+    async def get(self, _key: str):
+        raise RuntimeError("redis unavailable")
+
+    async def set(self, _key: str, _value: str, ex: int | None = None):
+        raise RuntimeError("redis unavailable")
+
+
+class IdempotencyFailClosedTests(unittest.TestCase):
+    def test_fail_closed_returns_503_when_redis_read_unavailable(self):
+        original = settings.idempotency_fail_closed
+        settings.idempotency_fail_closed = True
+        try:
+            with patch("app.core.idempotency.redis_async.from_url", return_value=_FailingAsyncRedis()):
+                app = FastAPI()
+                app.add_middleware(IdempotencyMiddleware, redis_url="redis://ignored")
+
+                @app.post("/echo")
+                def echo(payload: dict):
+                    return payload
+
+                client = TestClient(app)
+                response = client.post("/echo", json={"value": 1}, headers={"Idempotency-Key": "test-key"})
+                client.close()
+
+            self.assertEqual(response.status_code, 503)
+            self.assertEqual(response.json().get("mode"), "fail_closed")
+        finally:
+            settings.idempotency_fail_closed = original
 
 
 if __name__ == "__main__":

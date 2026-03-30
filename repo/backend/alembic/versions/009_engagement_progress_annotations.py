@@ -1,6 +1,6 @@
 """Add telemetry enhancements, milestone templates/revisions, annotation revisions
 
-Revision ID: 009_engagement_progress_annotations
+Revision ID: 009_engagement_annotations
 Revises: 008_publishing_history
 Create Date: 2024-01-09 00:00:00.000000
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "009_engagement_progress_annotations"
+revision: str = "009_engagement_annotations"
 down_revision: Union[str, None] = "008_publishing_history"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

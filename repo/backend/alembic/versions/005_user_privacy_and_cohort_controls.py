@@ -1,6 +1,6 @@
 """Add user privacy consent and deletion lifecycle fields
 
-Revision ID: 005_user_privacy_and_cohort_controls
+Revision ID: 005_user_privacy_cohort
 Revises: 004_auth_refresh_tokens
 Create Date: 2024-01-05 00:00:00.000000
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision: str = "005_user_privacy_and_cohort_controls"
+revision: str = "005_user_privacy_cohort"
 down_revision: Union[str, None] = "004_auth_refresh_tokens"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

@@ -1,6 +1,6 @@
 """Add consent toggles and token hash key metadata
 
-Revision ID: 014_security_privacy_encryption_updates
+Revision ID: 014_security_privacy_updates
 Revises: 013_webhooks_delivery_queue
 Create Date: 2024-01-14 00:00:00.000000
 
@@ -12,7 +12,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "014_security_privacy_encryption_updates"
+revision: str = "014_security_privacy_updates"
 down_revision: Union[str, None] = "013_webhooks_delivery_queue"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
