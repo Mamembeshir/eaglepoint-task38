@@ -132,6 +132,98 @@ services:
       retries: 12
       start_period: 15s
 
+  db-test:
+    image: postgres:16-alpine
+    profiles:
+      - test
+    environment:
+      POSTGRES_USER: ${TEST_POSTGRES_USER:-meritforge_test}
+      POSTGRES_PASSWORD: ${TEST_POSTGRES_PASSWORD:-meritforge_test_secret}
+      POSTGRES_DB: ${TEST_POSTGRES_DB:-meritforge_test}
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TEST_POSTGRES_USER:-meritforge_test} -d ${TEST_POSTGRES_DB:-meritforge_test}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - meritforge-network
+
+  redis-test:
+    image: redis:7-alpine
+    profiles:
+      - test
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - meritforge-network
+
+  backend-test-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    profiles:
+      - test
+    environment:
+      DATABASE_URL: postgresql+psycopg://${TEST_POSTGRES_USER:-meritforge_test}:${TEST_POSTGRES_PASSWORD:-meritforge_test_secret}@db-test:5432/${TEST_POSTGRES_DB:-meritforge_test}
+      REDIS_URL: redis://redis-test:6379/0
+      SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      PASSWORD_PEPPER_CURRENT: ${PASSWORD_PEPPER_CURRENT:-}
+      PASSWORD_PEPPER_PREVIOUS: ${PASSWORD_PEPPER_PREVIOUS:-}
+      REFRESH_TOKEN_HASH_KEYS: ${REFRESH_TOKEN_HASH_KEYS:-}
+      REFRESH_TOKEN_HASH_ACTIVE_KEY_ID: ${REFRESH_TOKEN_HASH_ACTIVE_KEY_ID:-legacy-sha256}
+      REFRESH_TOKEN_HASH_ROTATION_DAYS: ${REFRESH_TOKEN_HASH_ROTATION_DAYS:-180}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      ACCESS_COOKIE_NAME: ${ACCESS_COOKIE_NAME:-access_token}
+      REFRESH_COOKIE_NAME: ${REFRESH_COOKIE_NAME:-refresh_token}
+      STEP_UP_COOKIE_NAME: ${STEP_UP_COOKIE_NAME:-step_up_token}
+      STEP_UP_EXPIRE_MINUTES: ${STEP_UP_EXPIRE_MINUTES:-5}
+      USER_RATE_LIMIT_PER_MINUTE: ${USER_RATE_LIMIT_PER_MINUTE:-120}
+      RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-false}
+      IDEMPOTENCY_FAIL_CLOSED: ${IDEMPOTENCY_FAIL_CLOSED:-false}
+      INTEGRATION_HMAC_KEYS: ${INTEGRATION_HMAC_KEYS:-integration-key-a:integration-secret-a,integration-key-b:integration-secret-b}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost,http://localhost:3000,http://localhost}
+      DEBUG: ${DEBUG:-false}
+      SEED_DEV_PASSWORD: ${SEED_DEV_PASSWORD:-MeritForgeDev!2026}
+      PYTHONPATH: /app
+      ENABLE_BACKEND_COVERAGE: ${ENABLE_BACKEND_COVERAGE:-true}
+      COVERAGE_FILE: /coverage/.coverage.backend
+    volumes:
+      - ./backend/app:/app/app:ro
+      - ./backend/scripts:/app/scripts:ro
+      - backend_uploads:/app/uploads
+      - backend_coverage:/coverage
+    command: >
+      sh -c "
+      alembic upgrade head &&
+      if [ \"$${ENABLE_BACKEND_COVERAGE}\" = \"true\" ]; then
+        coverage run --parallel-mode -m uvicorn app.main:app --host 0.0.0.0 --port 8000;
+      else
+        uvicorn app.main:app --host 0.0.0.0 --port 8000;
+      fi"
+    depends_on:
+      db-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    networks:
+      - meritforge-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
   backend-test:
     build:
       context: ./backend
@@ -139,8 +231,8 @@ services:
     profiles:
       - test
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-meritforge}:${POSTGRES_PASSWORD:-meritforge_secret}@db:5432/${POSTGRES_DB:-meritforge}
-      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg://${TEST_POSTGRES_USER:-meritforge_test}:${TEST_POSTGRES_PASSWORD:-meritforge_test_secret}@db-test:5432/${TEST_POSTGRES_DB:-meritforge_test}
+      REDIS_URL: redis://redis-test:6379/0
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
       ALGORITHM: ${ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
@@ -160,7 +252,7 @@ services:
       RATE_LIMIT_FAIL_CLOSED: ${RATE_LIMIT_FAIL_CLOSED:-false}
       IDEMPOTENCY_FAIL_CLOSED: ${IDEMPOTENCY_FAIL_CLOSED:-false}
       INTEGRATION_HMAC_KEYS: ${INTEGRATION_HMAC_KEYS:-integration-key-a:integration-secret-a,integration-key-b:integration-secret-b}
-      API_BASE_URL: http://backend:8000
+      API_BASE_URL: http://backend-test-server:8000
       PYTHONPATH: /app
       COVERAGE_RCFILE: /tests/.coveragerc
     working_dir: /tests
@@ -179,11 +271,11 @@ services:
       - ./coverage_html:/tests/coverage_html
       - backend_coverage:/coverage
     depends_on:
-      db:
+      db-test:
         condition: service_healthy
-      redis:
+      redis-test:
         condition: service_healthy
-      backend:
+      backend-test-server:
         condition: service_healthy
     networks:
       - meritforge-network
@@ -201,7 +293,6 @@ services:
       NODE_ENV: test
     volumes:
       - ./frontend:/app:ro
-      - /app/node_modules
     networks:
       - meritforge-network
 
